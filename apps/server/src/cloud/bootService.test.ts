@@ -133,6 +133,8 @@ it("escapes XML in host paths", () => {
 const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
   platform: NodeJS.Platform = "linux",
   installerPath = macInstallerPath,
+  execPath = "/usr/bin/t3",
+  argv0?: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -220,7 +222,10 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
         baseDir: serviceBaseDir,
         logsDir: path.join(serviceBaseDir, "userdata", "logs"),
         cliVersion,
-        host: { execPath: "/usr/bin/t3" },
+        host: {
+          execPath,
+          ...(argv0 === undefined ? {} : { argv0 }),
+        },
       });
     }).pipe(
       Effect.provideService(ProcessRunner.ProcessRunner, runner),
@@ -228,7 +233,7 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
         Layer.mergeAll(
           Layer.succeed(HostProcessPlatform, platform),
           Layer.succeed(HostProcessUserId, 501),
-          Layer.succeed(HostProcessExecutablePath, "/usr/bin/t3"),
+          Layer.succeed(HostProcessExecutablePath, execPath),
           Layer.succeed(
             HttpClient.HttpClient,
             HttpClient.make(() => Effect.die("no release download expected")),
@@ -788,6 +793,58 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         "    <key>PATH</key>\n    <string>/opt/homebrew/bin:/usr/bin:/usr/local/bin:/bin:/usr/sbin:/sbin</string>",
       );
       expect(plist).not.toContain("\u0001");
+      expect((yield* service.status).current).toBe(true);
+    }),
+  );
+
+  it.effect("puts a Homebrew prefix bin on PATH instead of a Cellar keg on macOS", () =>
+    Effect.gen(function* () {
+      const { service, fs } = yield* makeHarness(
+        "darwin",
+        macInstallerPath,
+        "/opt/homebrew/Cellar/node/26.8.1/bin/node",
+      );
+      const plan = yield* service.install();
+      const plist = yield* fs.readFileString(plan.unitPath);
+
+      expect(plist).toContain("/opt/homebrew/bin");
+      expect(plist).not.toContain("Cellar");
+      expect(plan.program[0]).toContain("/runtime/versions/1.2.3/t3");
+      expect((yield* service.status).current).toBe(true);
+    }),
+  );
+
+  it.effect("puts a linuxbrew prefix bin on PATH instead of a Cellar keg", () =>
+    Effect.gen(function* () {
+      const { service, fs } = yield* makeHarness(
+        "linux",
+        "/home/linuxbrew/.linuxbrew/bin:/usr/bin:/bin",
+        "/home/linuxbrew/.linuxbrew/Cellar/node/24.4.0/bin/node",
+      );
+      const plan = yield* service.install();
+      const unit = yield* fs.readFileString(plan.unitPath);
+
+      expect(unit).toContain("/home/linuxbrew/.linuxbrew/bin");
+      expect(unit).not.toContain("Cellar");
+      expect(plan.program[0]).toContain("/runtime/versions/1.2.3/t3");
+      expect((yield* service.status).current).toBe(true);
+    }),
+  );
+
+  it.effect("keeps a non-keg argv0 directory on PATH when Node was invoked through opt", () =>
+    Effect.gen(function* () {
+      const { service, fs } = yield* makeHarness(
+        "darwin",
+        macInstallerPath,
+        "/opt/homebrew/Cellar/node@22/22.14.0/bin/node",
+        "/opt/homebrew/opt/node@22/bin/node",
+      );
+      const plan = yield* service.install();
+      const plist = yield* fs.readFileString(plan.unitPath);
+
+      expect(plist).toContain("/opt/homebrew/opt/node@22/bin");
+      expect(plist).not.toContain("Cellar");
+      expect(plan.program[0]).toContain("/runtime/versions/1.2.3/t3");
       expect((yield* service.status).current).toBe(true);
     }),
   );

@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 import { CLI_RELEASE_BASE_URL_ENV } from "@t3tools/shared/cliRelease";
 
 import * as ProcessRunner from "../processRunner.ts";
+import { stableNodeExecutablePath } from "../stableNodeExecutablePath.ts";
 import {
   ensurePinnedRuntimeInstalled,
   pinnedRuntimeCommand,
@@ -548,6 +549,8 @@ export class BootService extends Context.Service<
 
 export interface BootServiceHost {
   readonly execPath: string;
+  /** Original invocation path (`process.argv0`) when Node was started through a symlink. */
+  readonly argv0?: string;
 }
 
 export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
@@ -569,7 +572,8 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const runner = yield* ProcessRunner.ProcessRunner;
-  const host = input.host ?? { execPath: hostExecPath };
+  const host = input.host ?? { execPath: hostExecPath, argv0: process.argv0 };
+  const nodePath = stableNodeExecutablePath(host.execPath, host.argv0);
   const xmlSafeInstallerDirectories = installerPath.split(":").filter(
     (directory) =>
       directory.length > 0 &&
@@ -581,7 +585,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   const environmentPath = Array.from(
     new Set([
       ...xmlSafeInstallerDirectories,
-      path.dirname(host.execPath),
+      path.dirname(nodePath),
       "/opt/homebrew/bin",
       "/usr/local/bin",
       "/usr/bin",
