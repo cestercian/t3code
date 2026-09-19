@@ -29,6 +29,7 @@ beforeEach(() => {
   transitionCapturePageMock.mockReset().mockResolvedValue(undefined);
   transitionSnapshotMock.mockReset().mockResolvedValue(undefined);
   prepareCaptureRevealMock.mockReset();
+  accessibilityListMock.mockReset().mockResolvedValue([]);
 });
 
 const {
@@ -88,7 +89,7 @@ const {
     }
   >(),
   accessibilityByPidMock: vi.fn(),
-  accessibilityListMock: vi.fn(async () => []),
+  accessibilityListMock: vi.fn(),
   accessibilityForegroundMock: vi.fn(),
   accessibilityTrustedMock: vi.fn((_prompt = false) => true),
   allWindowsMock: vi.fn(
