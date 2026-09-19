@@ -817,15 +817,16 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
   it.effect("puts a linuxbrew prefix bin on PATH instead of a Cellar keg", () =>
     Effect.gen(function* () {
       const { service, fs } = yield* makeHarness(
-        "linux",
+        "darwin",
         "/home/linuxbrew/.linuxbrew/bin:/usr/bin:/bin",
         "/home/linuxbrew/.linuxbrew/Cellar/node/24.4.0/bin/node",
       );
       const plan = yield* service.install();
-      const unit = yield* fs.readFileString(plan.unitPath);
+      const plist = yield* fs.readFileString(plan.unitPath);
+      const environmentPath = /<key>PATH<\/key>\s*<string>([^<]*)<\/string>/.exec(plist)?.[1];
 
-      expect(unit).toContain("/home/linuxbrew/.linuxbrew/bin");
-      expect(unit).not.toContain("Cellar");
+      expect(environmentPath?.split(":")).toContain("/home/linuxbrew/.linuxbrew/bin");
+      expect(environmentPath).not.toContain("Cellar");
       expect(plan.program[0]).toContain("/runtime/versions/1.2.3/t3");
       expect((yield* service.status).current).toBe(true);
     }),
