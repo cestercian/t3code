@@ -520,7 +520,9 @@ export function findAccessibleWindow<
   // GTK4/libadwaita often exposes the frame as an unnamed group. A PID-scoped
   // lookup can accept the one window whose bounds match; size-only guesses cannot.
   if (!options.allowUntitledUniqueBounds) return undefined;
-  const boundsMatches = windows.filter(matchesBounds);
+  const boundsMatches = windows.filter(
+    (window) => normalizeTitle(window.name ?? "") === "" && matchesBounds(window),
+  );
   return boundsMatches.length === 1 ? boundsMatches[0] : undefined;
 }
 

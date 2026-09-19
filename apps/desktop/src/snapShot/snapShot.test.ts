@@ -484,6 +484,14 @@ describe("findAccessibleWindow", () => {
     ).toBeUndefined();
   });
 
+  it("does not fall back to a differently titled PID-scoped window with matching bounds", () => {
+    const windows = [{ name: "Preferences", bounds: captured.bounds }];
+
+    expect(
+      findAccessibleWindow(windows, captured, "wayland", { allowUntitledUniqueBounds: true }),
+    ).toBeUndefined();
+  });
+
   it("does not use unique bounds when a titled match is already ambiguous", () => {
     const windows = [
       { name: "Editor", bounds: captured.bounds },
