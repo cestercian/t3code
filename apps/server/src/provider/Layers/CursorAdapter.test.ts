@@ -550,19 +550,6 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       const workspace = yield* Effect.promise(() =>
         NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "cursor-cli-json-")),
       );
-      yield* Effect.promise(() =>
-        NodeFSP.mkdir(NodePath.join(workspace, ".cursor"), { recursive: true }),
-      );
-      yield* Effect.promise(() =>
-        NodeFSP.writeFile(
-          NodePath.join(workspace, ".cursor", "cli.json"),
-          JSON.stringify({
-            approvalMode: "unrestricted",
-            sandbox: { mode: "disabled", networkAccess: "allow_all" },
-          }),
-          "utf8",
-        ),
-      );
       const wrapperPath = writeFakeCli({
         directory: workspace,
         name: "fake-cursor-agent",
