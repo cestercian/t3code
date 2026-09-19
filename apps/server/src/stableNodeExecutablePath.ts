@@ -28,11 +28,11 @@ function isVerifiedDurableArgv0(argv0: string, execPath: string): boolean {
 
 function argv0RefersToExecPath(argv0: string, execPath: string): boolean {
   try {
-    const argvStat = NodeFS.statSync(argv0);
-    if (!argvStat.isFile() || (argvStat.mode & 0o111) === 0) {
+    const argvStat = NodeFS.statSync(argv0, { bigint: true });
+    if (!argvStat.isFile() || (argvStat.mode & 0o111n) === 0n) {
       return false;
     }
-    const execStat = NodeFS.statSync(execPath);
+    const execStat = NodeFS.statSync(execPath, { bigint: true });
     if (argvStat.dev === execStat.dev && argvStat.ino === execStat.ino) {
       return true;
     }

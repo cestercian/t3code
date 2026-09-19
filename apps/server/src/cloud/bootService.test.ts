@@ -31,13 +31,21 @@ const linuxPlan = {
   logPath: "/home/theo/.t3/userdata/logs/boot-service.log",
   unitPath: "/home/theo/.config/systemd/user/t3code.service",
 };
+const linuxInstallerPath = "/home/linuxbrew/.linuxbrew/bin:/usr/bin:/bin";
+const linuxRenderOptions = { environmentPath: linuxInstallerPath };
 
 it("runs the pinned runtime's own executable as the systemd launcher", () => {
-  const unit = BootService.renderBootServiceUnit(linuxPlan);
+  const unit = BootService.renderBootServiceUnit(linuxPlan, linuxRenderOptions);
 
   expect(unit).toContain(`ExecStart=${linuxRuntime} __service-launcher`);
   expect(unit).toContain("KillMode=mixed");
   expect(unit).not.toContain("node");
+});
+
+it("preserves the installer's provider search path in the systemd unit", () => {
+  const unit = BootService.renderBootServiceUnit(linuxPlan, linuxRenderOptions);
+
+  expect(unit).toContain(`Environment=PATH=${linuxInstallerPath}`);
 });
 
 it("reads the served T3 home back out of a rendered unit or plist", () => {
@@ -49,12 +57,14 @@ it("reads the served T3 home back out of a rendered unit or plist", () => {
   });
 
   expect(
-    BootService.bootServiceBaseDirOf(BootService.renderBootServiceUnit(plan("/home/theo/.t3"))),
+    BootService.bootServiceBaseDirOf(
+      BootService.renderBootServiceUnit(plan("/home/theo/.t3"), linuxRenderOptions),
+    ),
   ).toBe("/home/theo/.t3");
   // Spaces and specifiers are quoted and escaped on the way in.
   expect(
     BootService.bootServiceBaseDirOf(
-      BootService.renderBootServiceUnit(plan("/home/theo/T3 Data/100%")),
+      BootService.renderBootServiceUnit(plan("/home/theo/T3 Data/100%"), linuxRenderOptions),
     ),
   ).toBe("/home/theo/T3 Data/100%");
   expect(
@@ -69,7 +79,7 @@ it("reads the served T3 home back out of a rendered unit or plist", () => {
 });
 
 it("survives the kernel OOM-killing a greedy agent child", () => {
-  const unit = BootService.renderBootServiceUnit(linuxPlan);
+  const unit = BootService.renderBootServiceUnit(linuxPlan, linuxRenderOptions);
 
   expect(unit).toContain("OOMPolicy=continue");
 });
@@ -817,13 +827,13 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
   it.effect("puts a linuxbrew prefix bin on PATH instead of a Cellar keg", () =>
     Effect.gen(function* () {
       const { service, fs } = yield* makeHarness(
-        "darwin",
-        "/home/linuxbrew/.linuxbrew/bin:/usr/bin:/bin",
+        "linux",
+        linuxInstallerPath,
         "/home/linuxbrew/.linuxbrew/Cellar/node/24.4.0/bin/node",
       );
       const plan = yield* service.install();
-      const plist = yield* fs.readFileString(plan.unitPath);
-      const environmentPath = /<key>PATH<\/key>\s*<string>([^<]*)<\/string>/.exec(plist)?.[1];
+      const unit = yield* fs.readFileString(plan.unitPath);
+      const environmentPath = /^Environment=PATH=(.*)$/m.exec(unit)?.[1];
 
       expect(environmentPath?.split(":")).toContain("/home/linuxbrew/.linuxbrew/bin");
       expect(environmentPath).not.toContain("Cellar");
