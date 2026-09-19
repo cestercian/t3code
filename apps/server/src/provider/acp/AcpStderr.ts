@@ -1,8 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeOS from "node:os";
 
-import type * as EffectAcpErrors from "effect-acp/errors";
-
 /** Last few KiB of ACP child stderr kept for startup / exit diagnostics. */
 export const ACP_STDERR_TAIL_MAX_CHARS = 4_096;
 
@@ -37,11 +35,4 @@ export function sanitizeAcpStderrExcerpt(
     .replace(API_KEY_HEADER_PATTERN, "x-api-key: [redacted]")
     .replace(SECRET_TOKEN_PATTERN, "[redacted]");
   return result.trim();
-}
-
-export function formatAcpProcessExitDetail(error: EffectAcpErrors.AcpProcessExitedError): string {
-  const excerpt = error.stderr?.trim();
-  const base =
-    error.code === undefined ? "ACP process exited" : `ACP process exited with code ${error.code}`;
-  return excerpt && excerpt.length > 0 ? `${base}\n${excerpt}` : base;
 }

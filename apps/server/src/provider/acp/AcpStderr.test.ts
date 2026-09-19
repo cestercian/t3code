@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
-import * as EffectAcpErrors from "effect-acp/errors";
 
 import {
   ACP_STDERR_TAIL_MAX_CHARS,
   appendAcpStderrTail,
-  formatAcpProcessExitDetail,
   sanitizeAcpStderrExcerpt,
 } from "./AcpStderr.ts";
 
@@ -54,17 +52,5 @@ describe("AcpStderr", () => {
     expect(excerpt).not.toContain("abcdefghijklmnopqrstuvwxyz012345");
     expect(excerpt).not.toContain("dXNlcjpwYXNz");
     expect(excerpt).not.toContain("ant-api-key-value");
-  });
-
-  it("includes a stderr excerpt on process-exit detail", () => {
-    expect(
-      formatAcpProcessExitDetail(
-        new EffectAcpErrors.AcpProcessExitedError({
-          code: 1,
-          stderr:
-            "Invalid project config at ~/.cursor/cli.json: Unrecognized key(s): 'approvalMode'",
-        }),
-      ),
-    ).toContain("Unrecognized key(s): 'approvalMode'");
   });
 });

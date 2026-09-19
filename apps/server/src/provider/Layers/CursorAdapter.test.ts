@@ -591,8 +591,6 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       assert.equal(error._tag, "ProviderAdapterProcessError");
       assert.include(error.message, "cli.json");
       assert.include(error.message, "Unrecognized key");
-      assert.include(error.message, "permissions.json");
-      assert.include(error.message, "sandbox.json");
       assert.notInclude(error.message, "adapter thread is closed");
       if (error._tag === "ProviderAdapterProcessError") {
         assert.include(error.detail, "approvalMode");

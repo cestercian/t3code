@@ -11,7 +11,6 @@ import {
   ProviderAdapterRequestError,
   type ProviderAdapterError,
 } from "../Errors.ts";
-import { formatAcpProcessExitDetail } from "./AcpStderr.ts";
 const isAcpProcessExitedError = Schema.is(EffectAcpErrors.AcpProcessExitedError);
 const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);
 
@@ -25,7 +24,7 @@ export function mapAcpToAdapterError(
     return new ProviderAdapterProcessError({
       provider,
       threadId,
-      detail: formatAcpProcessExitDetail(error),
+      detail: error.message,
       cause: error,
     });
   }
