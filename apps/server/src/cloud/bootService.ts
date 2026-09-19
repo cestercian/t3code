@@ -573,6 +573,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   const path = yield* Path.Path;
   const runner = yield* ProcessRunner.ProcessRunner;
   const host = input.host ?? { execPath: hostExecPath, argv0: process.argv0 };
+  // argv0 is used only when it resolves to the same Node as execPath.
   const nodePath = stableNodeExecutablePath(host.execPath, host.argv0);
   const xmlSafeInstallerDirectories = installerPath.split(":").filter(
     (directory) =>

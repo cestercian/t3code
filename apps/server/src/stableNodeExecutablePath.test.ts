@@ -53,6 +53,7 @@ it("ignores an absolute argv0 that does not resolve to execPath", () => {
   expect(
     stableNodeExecutablePath("/opt/homebrew/Cellar/node/26.8.1/bin/node", "/tmp/not-node"),
   ).toBe("/opt/homebrew/bin/node");
+  expect(stableNodeExecutablePath("/usr/bin/node", "/tmp/not-node")).toBe("/usr/bin/node");
 });
 
 it("prefers argv0 when it is a non-keg absolute that resolves to execPath", () => {

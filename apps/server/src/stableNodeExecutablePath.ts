@@ -2,16 +2,15 @@
 import * as NodeFS from "node:fs";
 
 /**
- * Absolute Node to persist in a service unit or to spawn a managed runtime.
+ * Durable absolute Node for PATH and other host-Node lookups.
  *
- * launchd and systemd cannot search PATH, so the path must be absolute.
  * `process.execPath` is the wrong absolute: Node realpaths Homebrew's prefix
  * symlink into a Cellar keg (`/opt/homebrew/Cellar/node/<ver>/bin/node`) whose
  * lifetime is one `brew upgrade`. Prefer `process.argv0` only when it is an
  * absolute non-keg path that resolves to the same executable as execPath
- * (`exec -a` can otherwise plant a nonexistent path in the unit). Otherwise
- * rewrite a keg execPath: unversioned formulas to `$prefix/bin/<name>`,
- * keg-only `node@*` to `$prefix/opt/<formula>/bin/<name>`.
+ * (`exec -a` can otherwise plant a nonexistent path). Otherwise rewrite a keg
+ * execPath: unversioned formulas to `$prefix/bin/<name>`, keg-only `node@*`
+ * to `$prefix/opt/<formula>/bin/<name>`.
  */
 export function stableNodeExecutablePath(execPath: string, argv0?: string): string {
   if (argv0 !== undefined && isVerifiedDurableArgv0(argv0, execPath)) {

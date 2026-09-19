@@ -849,22 +849,42 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
     }),
   );
 
-  it.effect("writes a keg-only node@ Cellar path to Homebrew opt when argv0 is bare node", () =>
+  it.effect("puts keg-only node@ on the Homebrew opt PATH when argv0 is bare node", () =>
     Effect.gen(function* () {
       const { service, fs } = yield* makeHarness(
         "darwin",
-        false,
         macInstallerPath,
         "/opt/homebrew/Cellar/node@22/22.14.0/bin/node",
         "node",
       );
       const plan = yield* service.install();
       const plist = yield* fs.readFileString(plan.unitPath);
+      const environmentPath = /<key>PATH<\/key>\s*<string>([^<]*)<\/string>/.exec(plist)?.[1];
 
-      expect(plan.nodePath).toBe("/opt/homebrew/opt/node@22/bin/node");
-      expect(plist).toContain("<string>/opt/homebrew/opt/node@22/bin/node</string>");
-      expect(plist).not.toContain("/opt/homebrew/bin/node");
-      expect(plist).not.toContain("Cellar");
+      expect(environmentPath?.split(":")).toContain("/opt/homebrew/opt/node@22/bin");
+      expect(environmentPath).not.toContain("Cellar");
+      expect(plan.program[0]).toContain("/runtime/versions/1.2.3/t3");
+      expect((yield* service.status).current).toBe(true);
+    }),
+  );
+
+  it.effect("does not put an unverified argv0 directory on PATH", () =>
+    Effect.gen(function* () {
+      const { service, fs } = yield* makeHarness(
+        "darwin",
+        macInstallerPath,
+        "/opt/homebrew/Cellar/node/26.8.1/bin/node",
+        "/tmp/not-node",
+      );
+      const plan = yield* service.install();
+      const plist = yield* fs.readFileString(plan.unitPath);
+      const environmentPath = /<key>PATH<\/key>\s*<string>([^<]*)<\/string>/.exec(plist)?.[1];
+
+      expect(environmentPath?.split(":")).toContain("/opt/homebrew/bin");
+      expect(environmentPath?.split(":")).not.toContain("/tmp");
+      expect(environmentPath).not.toContain("not-node");
+      expect(environmentPath).not.toContain("Cellar");
+      expect(plan.program[0]).toContain("/runtime/versions/1.2.3/t3");
       expect((yield* service.status).current).toBe(true);
     }),
   );
