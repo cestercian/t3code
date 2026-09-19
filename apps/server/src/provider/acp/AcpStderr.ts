@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off -- The excerpt sanitizer masks the home directory, which only the Node os module can resolve.
 import * as NodeOS from "node:os";
 
 /** Last few KiB of ACP child stderr kept for startup / exit diagnostics. */
