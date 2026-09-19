@@ -543,6 +543,64 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
     }),
   );
 
+  it.effect("surfaces cursor-agent cli.json schema stderr instead of a closed-session error", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const settings = yield* ServerSettingsService;
+      const workspace = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "cursor-cli-json-")),
+      );
+      yield* Effect.promise(() =>
+        NodeFSP.mkdir(NodePath.join(workspace, ".cursor"), { recursive: true }),
+      );
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(
+          NodePath.join(workspace, ".cursor", "cli.json"),
+          JSON.stringify({
+            approvalMode: "unrestricted",
+            sandbox: { mode: "disabled", networkAccess: "allow_all" },
+          }),
+          "utf8",
+        ),
+      );
+      const wrapperPath = writeFakeCli({
+        directory: workspace,
+        name: "fake-cursor-agent",
+        source: [
+          "process.stderr.write(`Invalid project config at ${process.cwd()}/.cursor/cli.json: schema validation failed. [`",
+          "  + JSON.stringify({",
+          '      code: "unrecognized_keys",',
+          '      keys: ["approvalMode", "sandbox"],',
+          "      path: [],",
+          "      message: \"Unrecognized key(s) in object: 'approvalMode', 'sandbox'\",",
+          '    }) + "]\\n");',
+          "process.exit(1);",
+        ].join("\n"),
+      });
+      yield* settings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      const error = yield* adapter
+        .startSession({
+          threadId: ThreadId.make("cursor-cli-json-schema"),
+          provider: ProviderDriverKind.make("cursor"),
+          cwd: workspace,
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.flip);
+
+      assert.equal(error._tag, "ProviderAdapterProcessError");
+      assert.include(error.message, "cli.json");
+      assert.include(error.message, "Unrecognized key");
+      assert.include(error.message, "permissions.json");
+      assert.include(error.message, "sandbox.json");
+      assert.notInclude(error.message, "adapter thread is closed");
+      if (error._tag === "ProviderAdapterProcessError") {
+        assert.include(error.detail, "approvalMode");
+        assert.include(error.detail, "sandbox");
+      }
+    }),
+  );
+
   it.effect("maps app plan mode onto the ACP plan session mode", () =>
     Effect.gen(function* () {
       const adapter = yield* CursorAdapter;

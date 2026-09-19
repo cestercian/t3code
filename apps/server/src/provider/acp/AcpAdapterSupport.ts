@@ -7,10 +7,11 @@ import * as Schema from "effect/Schema";
 import * as EffectAcpErrors from "effect-acp/errors";
 
 import {
+  ProviderAdapterProcessError,
   ProviderAdapterRequestError,
-  ProviderAdapterSessionClosedError,
   type ProviderAdapterError,
 } from "../Errors.ts";
+import { formatAcpProcessExitDetail } from "./AcpStderr.ts";
 const isAcpProcessExitedError = Schema.is(EffectAcpErrors.AcpProcessExitedError);
 const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);
 
@@ -21,9 +22,10 @@ export function mapAcpToAdapterError(
   error: EffectAcpErrors.AcpError,
 ): ProviderAdapterError {
   if (isAcpProcessExitedError(error)) {
-    return new ProviderAdapterSessionClosedError({
+    return new ProviderAdapterProcessError({
       provider,
       threadId,
+      detail: formatAcpProcessExitDetail(error),
       cause: error,
     });
   }

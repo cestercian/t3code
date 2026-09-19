@@ -51,6 +51,7 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { acpPermissionOutcome, mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
+import { formatAcpProcessExitDetail } from "../acp/AcpStderr.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
@@ -67,6 +68,10 @@ import {
 } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
 import { applyCursorAcpModelSelection, makeCursorAcpRuntime } from "../acp/CursorAcpSupport.ts";
+import {
+  formatCursorAcpStartFailureDetail,
+  readDeprecatedCursorCliJsonKeys,
+} from "../acp/CursorCliConfig.ts";
 import { CursorTransportFailure } from "../acp/CursorTransportFailure.ts";
 import {
   CursorAskQuestionRequest,
@@ -509,6 +514,7 @@ export function makeCursorAdapter(
           }
 
           const cwd = path.resolve(input.cwd.trim());
+          const deprecatedCliKeys = readDeprecatedCursorCliJsonKeys(cwd);
           const cursorModelSelection =
             input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
           const existing = sessions.get(input.threadId);
@@ -757,9 +763,21 @@ export function makeCursorAdapter(
             );
             return yield* acp.start();
           }).pipe(
-            Effect.mapError((error) =>
-              mapAcpToAdapterError(PROVIDER, input.threadId, "session/start", error),
-            ),
+            Effect.mapError((error) => {
+              const mapped = mapAcpToAdapterError(PROVIDER, input.threadId, "session/start", error);
+              if (error._tag !== "AcpProcessExitedError" || deprecatedCliKeys.length === 0) {
+                return mapped;
+              }
+              return new ProviderAdapterProcessError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+                detail: formatCursorAcpStartFailureDetail({
+                  deprecatedKeys: deprecatedCliKeys,
+                  processDetail: formatAcpProcessExitDetail(error),
+                }),
+                cause: error,
+              });
+            }),
           );
 
           yield* applyRequestedSessionConfiguration({
