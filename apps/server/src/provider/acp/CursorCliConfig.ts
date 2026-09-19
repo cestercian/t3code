@@ -1,18 +1,28 @@
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off
-import * as NodeFS from "node:fs";
+import * as NodeFS from "node:fs/promises";
 import * as NodePath from "node:path";
 
 export const DEPRECATED_CURSOR_CLI_JSON_KEYS = ["approvalMode", "autoRun", "sandbox"] as const;
 
+/** Workspace cli.json is only used to name deprecated keys; skip huge or special files. */
+export const MAX_CURSOR_CLI_JSON_BYTES = 64 * 1024;
+
 export type DeprecatedCursorCliJsonKey = (typeof DEPRECATED_CURSOR_CLI_JSON_KEYS)[number];
 
-export function readDeprecatedCursorCliJsonKeys(
+export async function readDeprecatedCursorCliJsonKeys(
   cwd: string,
-): ReadonlyArray<DeprecatedCursorCliJsonKey> {
+): Promise<ReadonlyArray<DeprecatedCursorCliJsonKey>> {
+  const filePath = NodePath.join(cwd, ".cursor", "cli.json");
   try {
-    return detectDeprecatedCursorCliJsonKeys(
-      NodeFS.readFileSync(NodePath.join(cwd, ".cursor", "cli.json"), "utf8"),
-    );
+    const stats = await NodeFS.stat(filePath);
+    if (!stats.isFile() || stats.size > MAX_CURSOR_CLI_JSON_BYTES) {
+      return [];
+    }
+    const contents = await NodeFS.readFile(filePath);
+    if (contents.byteLength > MAX_CURSOR_CLI_JSON_BYTES) {
+      return [];
+    }
+    return detectDeprecatedCursorCliJsonKeys(contents.toString("utf8"));
   } catch {
     return [];
   }

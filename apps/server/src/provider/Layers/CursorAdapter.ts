@@ -514,7 +514,9 @@ export function makeCursorAdapter(
           }
 
           const cwd = path.resolve(input.cwd.trim());
-          const deprecatedCliKeys = readDeprecatedCursorCliJsonKeys(cwd);
+          const deprecatedCliKeys = yield* Effect.promise(() =>
+            readDeprecatedCursorCliJsonKeys(cwd),
+          );
           const cursorModelSelection =
             input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
           const existing = sessions.get(input.threadId);

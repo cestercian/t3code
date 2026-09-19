@@ -9,6 +9,7 @@ import {
   detectDeprecatedCursorCliJsonKeys,
   formatCursorAcpStartFailureDetail,
   formatDeprecatedCursorCliJsonMessage,
+  MAX_CURSOR_CLI_JSON_BYTES,
   readDeprecatedCursorCliJsonKeys,
 } from "./CursorCliConfig.ts";
 
@@ -30,7 +31,7 @@ describe("CursorCliConfig", () => {
     expect(detectDeprecatedCursorCliJsonKeys(JSON.stringify({ model: "default" }))).toEqual([]);
   });
 
-  it("reads deprecated keys from a project .cursor/cli.json", () => {
+  it("reads deprecated keys from a project .cursor/cli.json", async () => {
     const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "cursor-cli-config-"));
     NodeFS.mkdirSync(NodePath.join(cwd, ".cursor"), { recursive: true });
     NodeFS.writeFileSync(
@@ -38,8 +39,24 @@ describe("CursorCliConfig", () => {
       JSON.stringify({ autoRun: true, sandbox: { type: "insecure_none" } }),
       "utf8",
     );
-    expect(readDeprecatedCursorCliJsonKeys(cwd)).toEqual(["autoRun", "sandbox"]);
-    expect(readDeprecatedCursorCliJsonKeys(NodePath.join(cwd, "missing"))).toEqual([]);
+    expect(await readDeprecatedCursorCliJsonKeys(cwd)).toEqual(["autoRun", "sandbox"]);
+    expect(await readDeprecatedCursorCliJsonKeys(NodePath.join(cwd, "missing"))).toEqual([]);
+  });
+
+  it("skips oversized or non-regular .cursor/cli.json files", async () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "cursor-cli-config-"));
+    const cursorDir = NodePath.join(cwd, ".cursor");
+    NodeFS.mkdirSync(cursorDir, { recursive: true });
+    NodeFS.writeFileSync(
+      NodePath.join(cursorDir, "cli.json"),
+      `${"x".repeat(MAX_CURSOR_CLI_JSON_BYTES + 1)}`,
+      "utf8",
+    );
+    expect(await readDeprecatedCursorCliJsonKeys(cwd)).toEqual([]);
+
+    const specialCwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "cursor-cli-config-"));
+    NodeFS.mkdirSync(NodePath.join(specialCwd, ".cursor", "cli.json"), { recursive: true });
+    expect(await readDeprecatedCursorCliJsonKeys(specialCwd)).toEqual([]);
   });
 
   it("names the rejected keys and the sibling files they moved to", () => {

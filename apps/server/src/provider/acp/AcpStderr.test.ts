@@ -34,6 +34,28 @@ describe("AcpStderr", () => {
     expect(excerpt).not.toContain("sk-abcdefghijklmnopqrstuv");
   });
 
+  it("redacts hyphenated OpenAI project keys and header credentials", () => {
+    const excerpt = sanitizeAcpStderrExcerpt(
+      [
+        "openai=sk-proj-abcdefghijklmnopqrstuvwxyz012345",
+        "svc=sk-svcacct-abcdefghijklmnopqrstuvwxyz012345",
+        "anthropic=sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345",
+        "Authorization: Basic dXNlcjpwYXNz",
+        "x-api-key: ant-api-key-value",
+      ].join("\n"),
+    );
+
+    expect(excerpt).toContain("[redacted]");
+    expect(excerpt).toContain("Authorization: Basic [redacted]");
+    expect(excerpt).toContain("x-api-key: [redacted]");
+    expect(excerpt).not.toContain("sk-proj-");
+    expect(excerpt).not.toContain("sk-svcacct-");
+    expect(excerpt).not.toContain("sk-ant-api03-");
+    expect(excerpt).not.toContain("abcdefghijklmnopqrstuvwxyz012345");
+    expect(excerpt).not.toContain("dXNlcjpwYXNz");
+    expect(excerpt).not.toContain("ant-api-key-value");
+  });
+
   it("includes a stderr excerpt on process-exit detail", () => {
     expect(
       formatAcpProcessExitDetail(
