@@ -37,12 +37,11 @@ const PREPARED_TIMEOUT_MS = 120_000;
 const TERMINATE_GRACE_MS = 5_000;
 
 const SERVICE_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const MANAGED_SERVICE_ENV_NAMES = new Set([
-  "PATH",
-  "T3CODE_HOME",
-  "T3_BOOT_SERVICE_UNIT",
-  SERVICE_LAUNCHER_CONTEXT_ENV,
-]);
+const MANAGED_SERVICE_ENV_NAMES = new Set(
+  ["PATH", "T3CODE_HOME", "T3_BOOT_SERVICE_UNIT", SERVICE_LAUNCHER_CONTEXT_ENV].map((name) =>
+    name.toUpperCase(),
+  ),
+);
 
 type TerminalStatus = "committed" | "rolled-back" | "failed";
 type ChildRole = "active" | "trial";
@@ -94,14 +93,18 @@ async function pathExists(target: string): Promise<boolean> {
 
 /**
  * Reads KEY=VALUE assignments from the documented T3 home env file. Managed
- * names the unit already owns are ignored so a user cannot redirect the
- * service by writing PATH or T3CODE_HOME here.
+ * names the unit already owns are ignored, regardless of key case, so a
+ * user cannot redirect the service by writing PATH or T3CODE_HOME here.
  */
 export function parseServiceEnvFile(contents: string): Record<string, string> {
   const parsed = NodeUtil.parseEnv(contents);
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(parsed)) {
-    if (value === undefined || !SERVICE_ENV_NAME.test(key) || MANAGED_SERVICE_ENV_NAMES.has(key)) {
+    if (
+      value === undefined ||
+      !SERVICE_ENV_NAME.test(key) ||
+      MANAGED_SERVICE_ENV_NAMES.has(key.toUpperCase())
+    ) {
       continue;
     }
     env[key] = value;
