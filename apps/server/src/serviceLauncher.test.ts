@@ -56,6 +56,10 @@ it("parses KEY=VALUE assignments from the T3 home service env file", () => {
         "T3CODE_HOME=/should-not-override",
         "T3_BOOT_SERVICE_UNIT=should-not-override",
         "T3_SERVICE_LAUNCHER_CONTEXT=should-not-override",
+        "Path=/should-not-override-case",
+        "t3code_home=/should-not-override-case",
+        "T3_boot_service_unit=should-not-override-case",
+        "t3_service_launcher_context=should-not-override-case",
         "123BAD=x",
         "INVALID NAME=x",
         "",
@@ -152,6 +156,8 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
           "T3CODE_PORT=1234",
           "T3CODE_HOME=/should-not-override",
           "PATH=/should-not-override",
+          "Path=/should-not-override-case",
+          "t3code_home=/should-not-override-case",
           "",
         ].join("\n"),
       );
@@ -171,6 +177,10 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
       assert.equal(env.T3CODE_PORT, "1234");
       assert.equal(env.T3CODE_HOME, root);
       assert.equal(env.PATH, "/bin");
+      assert.isUndefined(serviceEnv.Path);
+      assert.isUndefined(serviceEnv.t3code_home);
+      assert.isUndefined(env.Path);
+      assert.isUndefined(env.t3code_home);
       // Later file edits wait for a service restart; children reuse the startup map.
       yield* fs.writeFileString(path.join(root, SERVICE_ENV_FILE), "T3CODE_PORT=9999\n");
 
