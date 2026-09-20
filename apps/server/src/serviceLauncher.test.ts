@@ -165,12 +165,14 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
         T3CODE_HOME: root,
         T3CODE_PORT: "old",
       };
-      yield* Effect.promise(() => applyServiceEnvFile(root, env));
+      const serviceEnv = yield* Effect.promise(() => applyServiceEnvFile(root, env));
       assert.equal(env.T3CODE_BITBUCKET_EMAIL, "you@example.com");
       assert.equal(env.T3CODE_BITBUCKET_API_TOKEN, "token with spaces");
       assert.equal(env.T3CODE_PORT, "1234");
       assert.equal(env.T3CODE_HOME, root);
       assert.equal(env.PATH, "/bin");
+      // Later file edits wait for a service restart; children reuse the startup map.
+      yield* fs.writeFileString(path.join(root, SERVICE_ENV_FILE), "T3CODE_PORT=9999\n");
 
       // @effect-diagnostics-next-line preferSchemaOverJson:off - embeds a path in fake child source.
       const encodedSeenPath = JSON.stringify(seenPath);
@@ -196,7 +198,11 @@ process.exit(0);
         }),
       );
 
-      const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
+      const launcher = new Launcher(
+        root,
+        yield* Effect.promise(() => readServiceState(statePath)),
+        serviceEnv,
+      );
       yield* Effect.promise(() =>
         launcher.run().then(
           () => Promise.reject(new Error("launcher unexpectedly completed")),

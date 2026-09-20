@@ -124,8 +124,10 @@ export async function readServiceEnvFile(baseDir: string): Promise<Record<string
 export async function applyServiceEnvFile(
   baseDir: string,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<void> {
-  Object.assign(env, await readServiceEnvFile(baseDir));
+): Promise<Record<string, string>> {
+  const serviceEnv = await readServiceEnvFile(baseDir);
+  Object.assign(env, serviceEnv);
+  return serviceEnv;
 }
 
 // Opened read-write: Windows refuses to flush a handle without write access.
@@ -326,6 +328,8 @@ const restartPendingPath = (baseDir: string) =>
 export class Launcher {
   readonly #baseDir: string;
   readonly #statePath: string;
+  // Startup snapshot from service.env. Later file edits wait for a service restart.
+  readonly #serviceEnv: Record<string, string>;
   #state: ServiceState;
   #child: ManagedChild | null = null;
   #timer: NodeJS.Timeout | undefined;
@@ -335,10 +339,11 @@ export class Launcher {
   #done = false;
   readonly #completion = Promise.withResolvers<void>();
 
-  constructor(baseDir: string, state: ServiceState) {
+  constructor(baseDir: string, state: ServiceState, serviceEnv: Record<string, string> = {}) {
     this.#baseDir = baseDir;
     this.#statePath = NodePath.join(baseDir, "runtime", SERVICE_STATE_FILE);
     this.#state = state;
+    this.#serviceEnv = serviceEnv;
   }
 
   async run(): Promise<void> {
@@ -475,7 +480,7 @@ export class Launcher {
     const child = NodeChildProcess.spawn(spawnArguments.command, spawnArguments.args, {
       env: {
         ...process.env,
-        ...(await readServiceEnvFile(this.#baseDir)),
+        ...this.#serviceEnv,
         [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify(context),
       },
       stdio: ["inherit", "inherit", "inherit", "ipc"],
@@ -681,8 +686,8 @@ export async function main(): Promise<void> {
   if (baseDir === undefined || baseDir === "") {
     throw new Error("T3CODE_HOME is required by the T3 Code service launcher.");
   }
-  await applyServiceEnvFile(baseDir);
+  const serviceEnv = await applyServiceEnvFile(baseDir);
   const statePath = NodePath.join(baseDir, "runtime", SERVICE_STATE_FILE);
   const state = await readServiceState(statePath);
-  await new Launcher(baseDir, state).run();
+  await new Launcher(baseDir, state, serviceEnv).run();
 }
