@@ -372,6 +372,57 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
     }),
   );
 
+  it.effect("rejects an oversized multibyte message counted in UTF-8 bytes", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const termination = yield* Deferred.make<CodexError.CodexAppServerError>();
+      const rawLines: Array<unknown> = [];
+      const decoded: Array<unknown> = [];
+      let notificationCount = 0;
+      const line = '{"method":"x","params":"你好你好"}';
+      assert.ok(line.length <= 32);
+      assert.ok(encoder.encode(line).byteLength > 32);
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        maxIncomingMessageBytes: 32,
+        logIncoming: true,
+        logger: (event) =>
+          Effect.sync(() => {
+            if (event.stage === "raw") {
+              rawLines.push(event.payload);
+            }
+            if (event.stage === "decoded") {
+              decoded.push(event.payload);
+            }
+          }),
+        onNotification: () => Effect.sync(() => notificationCount++).pipe(Effect.asVoid),
+        onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
+      });
+      const pending = yield* transport.request("thread/read", {}).pipe(Effect.forkScoped);
+      yield* Queue.take(output);
+
+      yield* Queue.offer(input, encoder.encode('{"method":"x"'));
+      yield* Queue.offer(input, encoder.encode(',"params":"你好'));
+      yield* Queue.offer(input, encoder.encode('你好"}\n'));
+
+      const error = yield* Deferred.await(termination);
+      assert.instanceOf(error, CodexError.CodexAppServerTransportError);
+      assert.equal(error.operation, "read-input-stream");
+      assert.equal(rawLines.length, 0);
+      assert.equal(decoded.length, 0);
+      assert.equal(notificationCount, 0);
+
+      const pendingError = yield* Fiber.join(pending).pipe(
+        Effect.match({
+          onFailure: (failure) => failure,
+          onSuccess: () =>
+            assert.fail("Expected the oversized multibyte message to fail the request"),
+        }),
+      );
+      assert.strictEqual(pendingError, error);
+    }),
+  );
+
   it.effect.each([1, 7, 1024])(
     "preserves JSONL framing and UTF-8 across %i-byte input chunks",
     (chunkSize) =>

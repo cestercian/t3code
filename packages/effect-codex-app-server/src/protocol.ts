@@ -16,10 +16,11 @@ const isJsonRpcId = Schema.is(JsonRpcId);
 const isJsonRpcResponseEnvelope = Schema.is(JsonRpcResponseEnvelope);
 const isCodexAppServerError = Schema.is(CodexError.CodexAppServerError);
 const MAX_BUFFERED_RAW_MESSAGES = 32;
-// Decoded remainder size before join/parse. 128 MiB sits above observed Codex
-// diffs (~49M characters) and Effect ndjson's 16 MiB default, and well below a
-// V8 heap-threatening line. Tests inject a smaller ceiling.
+// UTF-8 byte size of decoded remainder before join/parse. 128 MiB sits above
+// observed Codex diffs (~49M characters) and Effect ndjson's 16 MiB default,
+// and well below a V8 heap-threatening line. Tests inject a smaller ceiling.
 const MAX_INCOMING_MESSAGE_BYTES = 128 * 1024 * 1024;
+const utf8 = new TextEncoder();
 
 export interface CodexAppServerProtocolLogEvent {
   readonly direction: "incoming" | "outgoing";
@@ -143,12 +144,6 @@ const normalizeIncomingError = (
         operation,
         cause: error,
       });
-
-const incomingMessageTooLarge = (maxIncomingMessageBytes: number) =>
-  new CodexError.CodexAppServerTransportError({
-    operation: "read-input-stream",
-    cause: new Error(`Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`),
-  });
 
 const toProtocolMessage = (
   requestId: string | number,
@@ -416,13 +411,14 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
           const lines: Array<string> = [];
           let start = 0;
           const retainRange = (from: number, to: number) => {
-            const fragmentLength = to - from;
+            const fragment = chunk.slice(from, to);
+            const fragmentLength = utf8.encode(fragment).byteLength;
             if (remainderBytes + fragmentLength > maxIncomingMessageBytes) {
               remainder.length = 0;
               remainderBytes = 0;
               return false;
             }
-            remainder.push(chunk.slice(from, to));
+            remainder.push(fragment);
             remainderBytes += fragmentLength;
             return true;
           };
@@ -432,7 +428,14 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
             newline = chunk.indexOf("\n", start)
           ) {
             if (!retainRange(start, newline)) {
-              return Effect.fail(incomingMessageTooLarge(maxIncomingMessageBytes));
+              return Effect.fail(
+                new CodexError.CodexAppServerTransportError({
+                  operation: "read-input-stream",
+                  cause: new Error(
+                    `Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`,
+                  ),
+                }),
+              );
             }
             lines.push(remainder.join("").replace(/\r$/, ""));
             remainder.length = 0;
@@ -441,7 +444,14 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
           }
           // Keep unfinished lines in fragments so each chunk is scanned only once.
           if (start < chunk.length && !retainRange(start, chunk.length)) {
-            return Effect.fail(incomingMessageTooLarge(maxIncomingMessageBytes));
+            return Effect.fail(
+              new CodexError.CodexAppServerTransportError({
+                operation: "read-input-stream",
+                cause: new Error(
+                  `Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`,
+                ),
+              }),
+            );
           }
           return Effect.forEach(lines, handleLine, { discard: true });
         }),
@@ -456,7 +466,14 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
             if (remainderBytes > maxIncomingMessageBytes) {
               remainder.length = 0;
               remainderBytes = 0;
-              return Effect.fail(incomingMessageTooLarge(maxIncomingMessageBytes));
+              return Effect.fail(
+                new CodexError.CodexAppServerTransportError({
+                  operation: "read-input-stream",
+                  cause: new Error(
+                    `Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`,
+                  ),
+                }),
+              );
             }
             const line = remainder.join("");
             remainder.length = 0;
