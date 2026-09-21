@@ -798,27 +798,29 @@ export function ProviderInstanceCard({
         </Badge>
       ) : null}
       {versionCodeNode}
-      <span
-        inert={readOnly}
-        aria-disabled={readOnly || undefined}
-        className={cn("inline-flex items-center gap-1", readOnly && "opacity-50")}
-      >
-        {updateAvailableControl}
-        {titleTailNode}
-        {onDelete ? (
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost-muted"
-            disabled={readOnly}
-            className="[--control-icon-color:currentColor] hover:text-destructive"
-            onClick={onDelete}
-            aria-label={`Delete instance ${instanceId}`}
-          >
-            <Trash2Icon />
-          </Button>
-        ) : null}
-      </span>
+      {updateAvailableControl}
+      {titleTailNode || onDelete ? (
+        <span
+          inert={readOnly}
+          aria-disabled={readOnly || undefined}
+          className={cn("inline-flex items-center gap-1", readOnly && "opacity-50")}
+        >
+          {titleTailNode}
+          {onDelete ? (
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost-muted"
+              disabled={readOnly}
+              className="[--control-icon-color:currentColor] hover:text-destructive"
+              onClick={onDelete}
+              aria-label={`Delete instance ${instanceId}`}
+            >
+              <Trash2Icon />
+            </Button>
+          ) : null}
+        </span>
+      ) : null}
     </div>
   );
 

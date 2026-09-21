@@ -210,4 +210,12 @@ describe("ProviderInstanceCard update affordance", () => {
       expect(markup).not.toContain("Copy codex update command");
     }
   });
+
+  it("keeps the editor update glyph outside the read-only inert wrapper", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ProviderInstanceCard, { ...props, mode: "editor", readOnly: true }),
+    );
+    expect(markup).toContain('aria-label="Update available — view details"');
+    expect(markup).not.toMatch(/inert[\s\S]*aria-label="Update available — view details"/);
+  });
 });
