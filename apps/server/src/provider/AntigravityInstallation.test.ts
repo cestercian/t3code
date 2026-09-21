@@ -775,6 +775,114 @@ it.layer(NodeServices.layer)("Antigravity installation", (it) => {
       }),
   );
 
+  it.effect.each([".cmd", ".bat"] as const)(
+    "unwraps a Windows %s launcher next to the ACP pair instead of spawning it",
+    (extension) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { installation, baseDir } = yield* makeHarness({ platform: "win32" });
+        const extractDirectory = path.join(baseDir, "extract");
+        yield* fs.makeDirectory(extractDirectory);
+        const executable = path.join(extractDirectory, "agy_acp_server.exe");
+        const harness = path.join(extractDirectory, "localharness_external.exe");
+        const wrapper = path.join(extractDirectory, `agy-wrapper${extension}`);
+        yield* fs.writeFileString(executable, "external server", { mode: 0o755 });
+        yield* fs.writeFileString(harness, "external harness", { mode: 0o755 });
+        yield* fs.writeFileString(wrapper, `@echo off\r\n"%~dp0agy_acp_server.exe" %*\r\n`);
+        const selected = yield* installation.resolve(wrapper);
+        expect(selected).toMatchObject({
+          executablePath: executable,
+          harnessPath: harness,
+          source: "override",
+          managedVersionDirectory: null,
+        });
+        expect(selected.executablePath.toLowerCase().endsWith(extension)).toBe(false);
+      }),
+  );
+
+  it.effect("follows a Windows launcher to the same-version managed ACP pair", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { installation, baseDir } = yield* makeHarness({
+        platform: "win32",
+        previous: true,
+      });
+      const managed = yield* installation.resolve();
+      const wrapperDirectory = path.join(baseDir, "wrappers");
+      yield* fs.makeDirectory(wrapperDirectory);
+      const wrapper = path.join(wrapperDirectory, "agy-wrapper.cmd");
+      yield* fs.writeFileString(wrapper, `@echo off\r\n"${managed.executablePath}" %*\r\n`);
+      const selected = yield* installation.resolve(wrapper);
+      expect(selected).toMatchObject({
+        executablePath: managed.executablePath,
+        harnessPath: managed.harnessPath,
+        source: "override",
+        version: previousVersion,
+        managedVersionDirectory: managed.managedVersionDirectory,
+      });
+    }),
+  );
+
+  it.effect("follows a Windows launcher that points at an extract in another directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { installation, baseDir } = yield* makeHarness({
+        platform: "win32",
+        previous: true,
+      });
+      const extractDirectory = path.join(baseDir, "manual-extract");
+      yield* fs.makeDirectory(extractDirectory);
+      const executable = path.join(extractDirectory, "agy_acp_server.exe");
+      const harness = path.join(extractDirectory, "localharness_external.exe");
+      yield* fs.writeFileString(executable, "extract server", { mode: 0o755 });
+      yield* fs.writeFileString(harness, "extract harness", { mode: 0o755 });
+      const wrapperDirectory = path.join(baseDir, "wrappers");
+      yield* fs.makeDirectory(wrapperDirectory);
+      const wrapper = path.join(wrapperDirectory, "agy-wrapper.cmd");
+      const wrapperWithoutExtension = path.join(wrapperDirectory, "agy-wrapper");
+      yield* fs.writeFileString(
+        wrapper,
+        `@echo off\r\nset AGY_HOME=${extractDirectory}\r\n"${executable}" %*\r\n`,
+      );
+      const selected = yield* installation.resolve(wrapperWithoutExtension);
+      expect(selected).toMatchObject({
+        executablePath: executable,
+        harnessPath: harness,
+        source: "override",
+        managedVersionDirectory: null,
+      });
+      expect(yield* fs.readFileString(selected.executablePath)).toBe("extract server");
+      yield* expectPreviousRelease(installation);
+    }),
+  );
+
+  it.effect("rejects a Windows launcher that only has a copied harness sibling", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { installation, baseDir } = yield* makeHarness({
+        platform: "win32",
+        previous: true,
+      });
+      const wrapperDirectory = path.join(baseDir, "wrappers");
+      yield* fs.makeDirectory(wrapperDirectory);
+      const wrapper = path.join(wrapperDirectory, "agy-wrapper.cmd");
+      yield* fs.writeFileString(wrapper, "@echo off\r\necho not the ACP server\r\n");
+      yield* fs.writeFileString(
+        path.join(wrapperDirectory, "localharness_external.exe"),
+        "copied harness",
+        { mode: 0o755 },
+      );
+      expect(yield* installation.resolve(wrapper).pipe(Effect.flip)).toMatchObject({
+        operation: "resolve",
+      });
+      yield* expectPreviousRelease(installation);
+    }),
+  );
+
   it.effect("keeps leased releases available while new sessions resolve the new release", () =>
     Effect.gen(function* () {
       const { installation, fs, stagingReleased } = yield* makeHarness({ previous: true });

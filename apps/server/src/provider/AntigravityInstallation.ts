@@ -27,6 +27,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
 import type * as NodeStream from "node:stream";
 import * as Yauzl from "yauzl";
 
@@ -46,7 +47,10 @@ const DOWNLOAD_TIMEOUT = "45 minutes";
 const VALIDATION_TIMEOUT = "90 seconds";
 const FREE_SPACE_MARGIN = 256 * 1024 * 1024;
 const RECORD_MAX_BYTES = 8 * 1024;
+const WRAPPER_MAX_BYTES = 64 * 1024;
 const RELEASE_RECORD = ".install-complete.json";
+const WINDOWS_LAUNCHER_EXTENSIONS = new Set([".cmd", ".bat"]);
+const WINDOWS_OVERRIDE_EXTENSIONS = [".exe", ".cmd", ".bat"] as const;
 
 const ReleaseId = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u));
 const ActiveRelease = Schema.Struct({ releaseId: ReleaseId });
@@ -140,6 +144,62 @@ function executableNames(platform: NodeJS.Platform) {
   return platform === "win32"
     ? { executable: "agy_acp_server.exe", harness: "localharness_external.exe" }
     : { executable: "agy_acp_server.par", harness: "localharness_external" };
+}
+
+function isWindowsLauncherPath(filePath: string) {
+  return WINDOWS_LAUNCHER_EXTENSIONS.has(NodePath.win32.extname(filePath).toLowerCase());
+}
+
+function windowsOverrideCandidates(candidate: string, platform: NodeJS.Platform) {
+  if (platform !== "win32" || NodePath.win32.extname(candidate)) return [candidate];
+  return [candidate, ...WINDOWS_OVERRIDE_EXTENSIONS.map((extension) => `${candidate}${extension}`)];
+}
+
+function refersToAcpExecutable(value: string, executableName: string) {
+  const lower = value.trim().toLowerCase();
+  const name = executableName.toLowerCase();
+  return (
+    lower === name ||
+    lower.endsWith(`/${name}`) ||
+    lower.endsWith(`\\${name}`) ||
+    lower.endsWith(`%~dp0${name}`)
+  );
+}
+
+/** Quoted and unquoted references to the ACP executable inside a launcher script. */
+function wrapperExecutableReferences(contents: string, executableName: string) {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed) || !refersToAcpExecutable(trimmed, executableName)) return;
+    seen.add(trimmed);
+    found.push(trimmed);
+  };
+  for (const rawLine of contents.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (line.length === 0 || /^(?:rem\b|::)/iu.test(line)) continue;
+    for (const match of line.matchAll(/"([^"]+)"/g)) add(match[1] ?? "");
+    for (const match of line.matchAll(/'([^']+)'/g)) add(match[1] ?? "");
+    for (const token of line.split(/[\s,;=&|<>^]+/u)) add(token.replace(/^@+/u, ""));
+  }
+  return found;
+}
+
+function expandWrapperPath(referenced: string, wrapperDirectory: string, path: Path.Path) {
+  const trimmed = referenced.trim();
+  const drivePath = /%~dp0/iu;
+  if (drivePath.test(trimmed)) {
+    const rest = trimmed
+      .replace(drivePath, "")
+      .split(/[\\/]+/u)
+      .filter(Boolean);
+    return path.join(wrapperDirectory, ...rest);
+  }
+  if (path.isAbsolute(trimmed) || /^[A-Za-z]:[\\/]/u.test(trimmed)) {
+    return path.normalize(trimmed);
+  }
+  return path.join(wrapperDirectory, ...trimmed.split(/[\\/]+/u).filter(Boolean));
 }
 
 function isRunning(state: ProviderInstallState) {
@@ -362,12 +422,44 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     } satisfies AntigravityExecutable;
   });
 
+  // Follow .cmd/.bat wrappers to agy_acp_server.exe and use that file's
+  // sibling harness. ACP is JSON-RPC over stdin/stdout; spawning the
+  // launcher through cmd.exe breaks the handshake, and a copied harness
+  // next to the wrapper can be a different release.
+  const unwrapWindowsLauncher = Effect.fn("AntigravityInstallation.unwrapWindowsLauncher")(
+    function* (candidate: string) {
+      if (platform !== "win32" || !isWindowsLauncherPath(candidate)) return candidate;
+      const sibling = path.join(path.dirname(candidate), names.executable);
+      if (yield* executableFile(sibling)) return yield* fs.realPath(sibling);
+      const info = yield* fs.stat(candidate).pipe(Effect.option);
+      if (
+        Option.isNone(info) ||
+        info.value.type !== "File" ||
+        Number(info.value.size) > WRAPPER_MAX_BYTES
+      ) {
+        return null;
+      }
+      const contents = yield* fs.readFileString(candidate);
+      const wrapperDirectory = path.dirname(candidate);
+      for (const referenced of wrapperExecutableReferences(contents, names.executable)) {
+        const resolved = expandWrapperPath(referenced, wrapperDirectory, path);
+        if (!(yield* executableFile(resolved))) continue;
+        const real = yield* fs.realPath(resolved);
+        if (path.basename(real).toLowerCase() !== names.executable.toLowerCase()) continue;
+        return real;
+      }
+      return null;
+    },
+  );
+
   const fromExternal = Effect.fn("AntigravityInstallation.fromExternal")(function* (
     candidate: string,
     source: "override" | "path",
   ) {
     if (!(yield* executableFile(candidate))) return null;
-    const executablePath = yield* fs.realPath(candidate);
+    const resolvedCandidate = yield* fs.realPath(candidate);
+    const executablePath = yield* unwrapWindowsLauncher(resolvedCandidate);
+    if (!executablePath) return null;
     const directory = path.dirname(executablePath);
     const harnessPath = path.join(directory, names.harness);
     if (!(yield* executableFile(harnessPath))) return null;
@@ -412,8 +504,10 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
             ? [path.resolve(override)]
             : pathCandidates(override, processEnvironment);
         for (const candidate of candidates) {
-          const selected = yield* fromExternal(candidate, "override");
-          if (selected) return selected;
+          for (const option of windowsOverrideCandidates(candidate, platform)) {
+            const selected = yield* fromExternal(option, "override");
+            if (selected) return selected;
+          }
         }
         return yield* installationError(
           "resolve",
