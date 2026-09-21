@@ -192,14 +192,19 @@ function provenWrapperLaunchTarget(contents: string, executableName: string) {
   let found: string | undefined;
   for (const rawLine of contents.split(/\r?\n/u)) {
     const line = rawLine.trim().replace(/^@+/u, "").trim();
-    if (line.length === 0 || /^(?:rem\b|::)/iu.test(line) || BATCH_IGNORABLE_LINE.test(line)) {
+    if (line.length === 0 || /^(?:rem\b|::)/iu.test(line)) {
+      continue;
+    }
+    if (/[&|<>()]/.test(line.replace(/"[^"]*"/g, ""))) {
+      return null;
+    }
+    if (BATCH_IGNORABLE_LINE.test(line)) {
       continue;
     }
     if (
       BATCH_CONTROL_FLOW_LINE.test(line) ||
       /^:[^:]/u.test(line) ||
-      (line.match(/"/g) ?? []).length % 2 !== 0 ||
-      /[&|<>()]/.test(line.replace(/"[^"]*"/g, ""))
+      (line.match(/"/g) ?? []).length % 2 !== 0
     ) {
       return null;
     }

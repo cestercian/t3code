@@ -905,6 +905,46 @@ it.layer(NodeServices.layer)("Antigravity installation", (it) => {
       }),
   );
 
+  it.effect("rejects a Windows launcher that chains a launch onto setlocal", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { installation, baseDir } = yield* makeHarness({
+        platform: "win32",
+        previous: true,
+      });
+      const releaseA = path.join(baseDir, "release-a");
+      const releaseB = path.join(baseDir, "release-b");
+      yield* fs.makeDirectory(releaseA);
+      yield* fs.makeDirectory(releaseB);
+      const executableA = path.join(releaseA, "agy_acp_server.exe");
+      const executableB = path.join(releaseB, "agy_acp_server.exe");
+      yield* fs.writeFileString(executableA, "release a server", { mode: 0o755 });
+      yield* fs.writeFileString(
+        path.join(releaseA, "localharness_external.exe"),
+        "release a harness",
+        { mode: 0o755 },
+      );
+      yield* fs.writeFileString(executableB, "release b server", { mode: 0o755 });
+      yield* fs.writeFileString(
+        path.join(releaseB, "localharness_external.exe"),
+        "release b harness",
+        { mode: 0o755 },
+      );
+      const wrapperDirectory = path.join(baseDir, "wrappers");
+      yield* fs.makeDirectory(wrapperDirectory);
+      const wrapper = path.join(wrapperDirectory, "agy-wrapper.cmd");
+      yield* fs.writeFileString(
+        wrapper,
+        ["@echo off", `setlocal & "${executableA}" %*`, `"${executableB}" %*`, ""].join("\r\n"),
+      );
+      expect(yield* installation.resolve(wrapper).pipe(Effect.flip)).toMatchObject({
+        operation: "resolve",
+      });
+      yield* expectPreviousRelease(installation);
+    }),
+  );
+
   it.effect("rejects a Windows launcher with no proven launch even when a sibling exists", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
