@@ -173,7 +173,7 @@ function isProvenLaunchPath(value: string, executableName: string) {
 }
 
 const BATCH_IGNORABLE_LINE =
-  /^(?:echo(?:\.|\s+.*)?|set(?:local)?\b.*|endlocal\b.*|(?:cd|chdir|pushd|popd)\b.*|(?:title|chcp|cls|color)\b.*)$/iu;
+  /^(?:echo(?:\.|\s+.*)?|set(?:local)?\b.*|endlocal\b.*|(?:cd|chdir|pushd|popd)\b.*|(?:title|chcp|cls|color)\b.*|exit\s+\/b\b.*)$/iu;
 const BATCH_CONTROL_FLOW_LINE = /^(?:if|else|goto|for|start)\b/iu;
 
 function provenBatchLaunchPath(command: string, executableName: string) {

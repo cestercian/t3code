@@ -801,6 +801,32 @@ it.layer(NodeServices.layer)("Antigravity installation", (it) => {
       }),
   );
 
+  it.effect("follows a Windows launcher that ends with exit /b after a proven launch", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { installation, baseDir } = yield* makeHarness({ platform: "win32" });
+      const extractDirectory = path.join(baseDir, "extract");
+      yield* fs.makeDirectory(extractDirectory);
+      const executable = path.join(extractDirectory, "agy_acp_server.exe");
+      const harness = path.join(extractDirectory, "localharness_external.exe");
+      const wrapper = path.join(extractDirectory, "agy-wrapper.cmd");
+      yield* fs.writeFileString(executable, "external server", { mode: 0o755 });
+      yield* fs.writeFileString(harness, "external harness", { mode: 0o755 });
+      yield* fs.writeFileString(
+        wrapper,
+        ["@echo off", `"%~dp0agy_acp_server.exe" %*`, "exit /b %ERRORLEVEL%", ""].join("\r\n"),
+      );
+      const selected = yield* installation.resolve(wrapper);
+      expect(selected).toMatchObject({
+        executablePath: executable,
+        harnessPath: harness,
+        source: "override",
+        managedVersionDirectory: null,
+      });
+    }),
+  );
+
   it.effect("follows a Windows launcher to the same-version managed ACP pair", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
