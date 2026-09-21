@@ -16,6 +16,10 @@ const isJsonRpcId = Schema.is(JsonRpcId);
 const isJsonRpcResponseEnvelope = Schema.is(JsonRpcResponseEnvelope);
 const isCodexAppServerError = Schema.is(CodexError.CodexAppServerError);
 const MAX_BUFFERED_RAW_MESSAGES = 32;
+// Decoded remainder size before join/parse. 128 MiB sits above observed Codex
+// diffs (~49M characters) and Effect ndjson's 16 MiB default, and well below a
+// V8 heap-threatening line. Tests inject a smaller ceiling.
+const MAX_INCOMING_MESSAGE_BYTES = 128 * 1024 * 1024;
 
 export interface CodexAppServerProtocolLogEvent {
   readonly direction: "incoming" | "outgoing";
@@ -39,6 +43,7 @@ export interface CodexAppServerPatchedProtocolOptions {
   readonly terminationError?: Effect.Effect<CodexError.CodexAppServerError>;
   readonly logIncoming?: boolean;
   readonly logOutgoing?: boolean;
+  readonly maxIncomingMessageBytes?: number;
   readonly logger?: (event: CodexAppServerProtocolLogEvent) => Effect.Effect<void, never>;
   readonly onNotification?: (
     notification: CodexAppServerIncomingNotification,
@@ -139,6 +144,12 @@ const normalizeIncomingError = (
         cause: error,
       });
 
+const incomingMessageTooLarge = (maxIncomingMessageBytes: number) =>
+  new CodexError.CodexAppServerTransportError({
+    operation: "read-input-stream",
+    cause: new Error(`Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`),
+  });
+
 const toProtocolMessage = (
   requestId: string | number,
   fields: {
@@ -164,7 +175,9 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       yield* Queue.sliding<CodexAppServerIncomingRequest>(MAX_BUFFERED_RAW_MESSAGES);
     const pending = yield* Ref.make(new Map<string, CodexAppServerPendingRequest>());
     const nextRequestId = yield* Ref.make(1);
+    const maxIncomingMessageBytes = options.maxIncomingMessageBytes ?? MAX_INCOMING_MESSAGE_BYTES;
     const remainder: Array<string> = [];
+    let remainderBytes = 0;
     const terminationHandled = yield* Ref.make(false);
     const terminationFailure = yield* Ref.make(Option.none<CodexError.CodexAppServerError>());
     const terminationSignal = yield* Deferred.make<void>();
@@ -399,25 +412,39 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       Stream.interruptWhen(Deferred.await(terminationSignal)),
       Stream.decodeText(),
       Stream.runForEach((chunk) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           const lines: Array<string> = [];
           let start = 0;
+          const retainRange = (from: number, to: number) => {
+            const fragmentLength = to - from;
+            if (remainderBytes + fragmentLength > maxIncomingMessageBytes) {
+              remainder.length = 0;
+              remainderBytes = 0;
+              return false;
+            }
+            remainder.push(chunk.slice(from, to));
+            remainderBytes += fragmentLength;
+            return true;
+          };
           for (
             let newline = chunk.indexOf("\n");
             newline !== -1;
             newline = chunk.indexOf("\n", start)
           ) {
-            remainder.push(chunk.slice(start, newline));
+            if (!retainRange(start, newline)) {
+              return Effect.fail(incomingMessageTooLarge(maxIncomingMessageBytes));
+            }
             lines.push(remainder.join("").replace(/\r$/, ""));
             remainder.length = 0;
+            remainderBytes = 0;
             start = newline + 1;
           }
           // Keep unfinished lines in fragments so each chunk is scanned only once.
-          if (start < chunk.length) {
-            remainder.push(chunk.slice(start));
+          if (start < chunk.length && !retainRange(start, chunk.length)) {
+            return Effect.fail(incomingMessageTooLarge(maxIncomingMessageBytes));
           }
-          return lines;
-        }).pipe(Effect.flatMap((lines) => Effect.forEach(lines, handleLine, { discard: true }))),
+          return Effect.forEach(lines, handleLine, { discard: true });
+        }),
       ),
       Effect.matchEffect({
         onFailure: (error) =>
@@ -425,12 +452,17 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
             Effect.succeed(normalizeIncomingError(error, "read-input-stream")),
           ),
         onSuccess: () =>
-          Effect.sync(() => {
+          Effect.suspend(() => {
+            if (remainderBytes > maxIncomingMessageBytes) {
+              remainder.length = 0;
+              remainderBytes = 0;
+              return Effect.fail(incomingMessageTooLarge(maxIncomingMessageBytes));
+            }
             const line = remainder.join("");
             remainder.length = 0;
-            return line;
+            remainderBytes = 0;
+            return handleLine(line);
           }).pipe(
-            Effect.flatMap(handleLine),
             Effect.matchEffect({
               onFailure: (error) => handleTermination(() => Effect.succeed(error)),
               onSuccess: () =>
