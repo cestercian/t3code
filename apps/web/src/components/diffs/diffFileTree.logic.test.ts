@@ -5,6 +5,8 @@ import {
   buildDiffFileTreeUpdates,
   collectDirectoryPaths,
   diffFileTreeEntries,
+  diffFileTreeModelPaths,
+  hasFileDirectoryPrefixCollision,
 } from "./diffFileTree.logic";
 
 function file(type: FileDiffMetadata["type"], name: string, prevName = name): FileDiffMetadata {
@@ -65,5 +67,41 @@ describe("buildDiffFileTreeUpdates", () => {
 
   it("produces nothing when the paths are unchanged", () => {
     expect(buildDiffFileTreeUpdates(["src/a.ts"], ["src/a.ts"])).toEqual([]);
+  });
+});
+
+describe("hasFileDirectoryPrefixCollision", () => {
+  it("detects a file replaced by a directory of the same name", () => {
+    expect(hasFileDirectoryPrefixCollision(["office", "office/config.ts"])).toBe(true);
+  });
+
+  it("detects the reverse directory-to-file transition", () => {
+    expect(hasFileDirectoryPrefixCollision(["office/config.ts", "office"])).toBe(true);
+  });
+
+  it("detects a collision deeper than the first segment", () => {
+    expect(hasFileDirectoryPrefixCollision(["src/office", "src/office/config.ts"])).toBe(true);
+  });
+
+  it("does not treat a shared string prefix as a colliding directory", () => {
+    expect(hasFileDirectoryPrefixCollision(["office", "officer.ts"])).toBe(false);
+  });
+
+  it("does not collide when only the directory's descendants are present", () => {
+    expect(hasFileDirectoryPrefixCollision(["office/config.ts", "office/index.ts"])).toBe(false);
+  });
+});
+
+describe("diffFileTreeModelPaths", () => {
+  it("hands ordinary diffs to Pierre unchanged", () => {
+    const paths = ["src/a.ts", "README.md"];
+    expect(diffFileTreeModelPaths(paths)).toBe(paths);
+  });
+
+  it("withholds a colliding set so Pierre never builds both a file and its directory", () => {
+    expect(diffFileTreeModelPaths(["office", "office/config.ts"])).toEqual([]);
+    expect(diffFileTreeModelPaths(["office", "office/config.ts"])).toBe(
+      diffFileTreeModelPaths(["office/config.ts", "office"]),
+    );
   });
 });

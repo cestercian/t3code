@@ -191,3 +191,127 @@ describe("diff tree file activation", () => {
     expect(targets).toHaveLength(1);
   });
 });
+
+describe("diff tree file/directory prefix collisions", () => {
+  let renderer: ReactTestRenderer | undefined;
+  const targets: CodeViewScrollTarget[] = [];
+  const viewer = {
+    getInstance: () => viewer,
+    scrollTo: (target: CodeViewScrollTarget) => targets.push(target),
+  };
+
+  function Panel({
+    files,
+    selectedPath = null,
+    revealRequestId = 0,
+  }: {
+    files: DiffFileTreeEntry[];
+    selectedPath?: string | null;
+    revealRequestId?: number;
+  }) {
+    const reveal = useCodeViewFileReveal(viewer, "working-tree");
+    return (
+      <DiffFileTree
+        entries={files}
+        ariaLabel="Working tree files"
+        selectedPath={selectedPath}
+        revealRequestId={revealRequestId}
+        onSelectFile={(path) => reveal(`${path}\0${path}`)}
+      />
+    );
+  }
+
+  async function mount(props: Parameters<typeof Panel>[0]) {
+    await act(async () => {
+      renderer = create(<Panel {...props} />);
+    });
+  }
+
+  async function activateListed(path: string) {
+    const button = renderer!.root.find(
+      (node) => node.type === "button" && node.props["data-item-path"] === path,
+    );
+    await act(async () => {
+      button.props.onClick();
+    });
+  }
+
+  beforeEach(() => {
+    targets.length = 0;
+    vi.useFakeTimers();
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("HTMLElement", TreeRow);
+  });
+
+  afterEach(async () => {
+    await act(async () => renderer?.unmount());
+    renderer = undefined;
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps every file selectable when a path is both a file and a directory", async () => {
+    await mount({
+      files: [
+        { path: "office", status: "deleted" },
+        { path: "office/config.ts", status: "added" },
+      ],
+    });
+    await activateListed("office");
+    await activateListed("office/config.ts");
+    expect(targets.map((target) => ("id" in target ? target.id : null))).toEqual([
+      "office\u0000office",
+      "office/config.ts\u0000office/config.ts",
+    ]);
+  });
+
+  it("keeps every file selectable for the reverse directory-to-file transition", async () => {
+    await mount({
+      files: [
+        { path: "office/config.ts", status: "deleted" },
+        { path: "office", status: "added" },
+      ],
+    });
+    await activateListed("office/config.ts");
+    await activateListed("office");
+    expect(targets.map((target) => ("id" in target ? target.id : null))).toEqual([
+      "office/config.ts\u0000office/config.ts",
+      "office\u0000office",
+    ]);
+  });
+
+  it("switches to the list when a later slice introduces a colliding descendant", async () => {
+    await mount({ files: [{ path: "src/a.ts", status: "modified" }] });
+    await act(async () => {
+      renderer!.update(
+        <Panel
+          files={[
+            { path: "src/a.ts", status: "modified" },
+            { path: "office", status: "deleted" },
+            { path: "office/config.ts", status: "added" },
+          ]}
+        />,
+      );
+    });
+    await activateListed("office");
+    await activateListed("office/config.ts");
+    expect(targets.map((target) => ("id" in target ? target.id : null))).toEqual([
+      "office\u0000office",
+      "office/config.ts\u0000office/config.ts",
+    ]);
+  });
+
+  it("keeps every colliding file selectable after a refresh of the same set", async () => {
+    const files: DiffFileTreeEntry[] = [
+      { path: "office", status: "deleted" },
+      { path: "office/config.ts", status: "added" },
+    ];
+    await mount({ files, selectedPath: "office" });
+    await act(async () => {
+      renderer!.update(<Panel files={files.map((file) => ({ ...file }))} selectedPath="office" />);
+    });
+    await activateListed("office");
+    expect(targets).toEqual([{ type: "item", id: "office\u0000office", align: "start" }]);
+  });
+});

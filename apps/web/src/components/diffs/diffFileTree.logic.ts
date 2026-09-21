@@ -30,6 +30,36 @@ export function diffFileTreeEntries(
   return files.map((file) => ({ path: resolveFileDiffPath(file), status: toGitStatus(file) }));
 }
 
+const EMPTY_DIFF_FILE_TREE_PATHS: ReadonlyArray<string> = [];
+
+/**
+ * Pierre's tree is a single filesystem: a path cannot be a file and a directory at once.
+ * Git can produce both when a file or symlink is replaced by a directory of the same name
+ * (delete `office`, add `office/config.ts`) or the reverse.
+ */
+export function hasFileDirectoryPrefixCollision(paths: ReadonlyArray<string>): boolean {
+  if (paths.length < 2) return false;
+  const unique = [...new Set(paths)].toSorted();
+  for (let index = 0; index < unique.length; index++) {
+    const path = unique[index]!;
+    const directoryPrefix = `${path}/`;
+    for (let next = index + 1; next < unique.length; next++) {
+      const other = unique[next]!;
+      if (!other.startsWith(path)) break;
+      if (other.startsWith(directoryPrefix)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Paths Pierre can represent as a tree. A colliding set is withheld entirely so the sidebar
+ * can show a flat list instead of throwing while creating a directory that is already a file.
+ */
+export function diffFileTreeModelPaths(paths: ReadonlyArray<string>): ReadonlyArray<string> {
+  return hasFileDirectoryPrefixCollision(paths) ? EMPTY_DIFF_FILE_TREE_PATHS : paths;
+}
+
 /**
  * Every directory on the way to each file, registered with the trailing slash Pierre uses for
  * directory ids. Parents come before children so the tree can add them in order.

@@ -14,6 +14,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   buildDiffFileTreeUpdates,
   collectDirectoryPaths,
+  diffFileTreeModelPaths,
   type DiffFileTreeEntry,
 } from "./diffFileTree.logic";
 
@@ -40,6 +41,9 @@ interface DiffFileTreeProps {
 /**
  * A directory tree of the files in a diff. Every directory starts open: a diff is a short list
  * compared to a workspace, and the reader came for the files, not the folders.
+ *
+ * Git can replace a file or symlink with a directory of the same name (and the reverse). Pierre
+ * cannot represent both, so those diffs are shown as a flat list instead of crashing the tree.
  */
 export function DiffFileTree({
   entries,
@@ -53,10 +57,15 @@ export function DiffFileTree({
 }: DiffFileTreeProps) {
   const { resolvedTheme } = useTheme();
   const paths = useMemo(() => entries.map((entry) => entry.path), [entries]);
-  const directoryPaths = useMemo(() => collectDirectoryPaths(paths), [paths]);
+  const treePaths = useMemo(() => diffFileTreeModelPaths(paths), [paths]);
+  const hasPrefixCollision = treePaths !== paths;
+  const directoryPaths = useMemo(() => collectDirectoryPaths(treePaths), [treePaths]);
   const gitStatus = useMemo<ReadonlyArray<GitStatusEntry>>(
-    () => entries.map((entry) => ({ path: entry.path, status: entry.status })),
-    [entries],
+    () =>
+      hasPrefixCollision
+        ? []
+        : entries.map((entry) => ({ path: entry.path, status: entry.status })),
+    [entries, hasPrefixCollision],
   );
   const filePathsRef = useRef<ReadonlySet<string>>(new Set(paths));
   const onSelectFileRef = useRef(onSelectFile);
@@ -91,16 +100,16 @@ export function DiffFileTree({
 
   useEffect(() => {
     const mountedPaths = mountedPathsRef.current;
-    if (mountedPaths === paths) return;
-    mountedPathsRef.current = paths;
+    if (mountedPaths === treePaths) return;
+    mountedPathsRef.current = treePaths;
     if (mountedPaths === null) {
-      model.resetPaths(paths);
+      model.resetPaths(treePaths);
     } else {
-      const updates = buildDiffFileTreeUpdates(mountedPaths, paths);
+      const updates = buildDiffFileTreeUpdates(mountedPaths, treePaths);
       if (updates.length > 0) model.batch(updates);
     }
     model.setGitStatus(gitStatus);
-  }, [gitStatus, model, paths]);
+  }, [gitStatus, model, treePaths]);
 
   useEffect(() => {
     if (selectedPath === null) {
@@ -109,6 +118,12 @@ export function DiffFileTree({
     }
     // A path list that changes under an already-revealed file (a refresh, a later slice) must
     // not pull the tree back to it over whatever the reader has picked since.
+    if (!treePaths.includes(selectedPath)) {
+      // A file that left the diff, or a colliding set shown as a flat list, has to be revealed
+      // again when it is back in the tree.
+      handledRevealRef.current = null;
+      return;
+    }
     const item = model.getItem(selectedPath);
     if (item === null || item.isDirectory()) {
       // A file that left the diff has to be revealed again when it comes back.
@@ -133,8 +148,7 @@ export function DiffFileTree({
     queueMicrotask(() => {
       syncingSelectionRef.current = false;
     });
-    // `paths` is a dependency so a file that arrives after it was asked for is still revealed.
-  }, [model, paths, revealRequestId, selectedPath]);
+  }, [model, revealRequestId, selectedPath, treePaths]);
 
   return (
     <div className={cn("flex min-h-0 flex-1 flex-col bg-background", className)}>
@@ -174,36 +188,132 @@ export function DiffFileTree({
           </Tooltip>
         ) : null}
       </div>
-      <FileTree
-        model={model}
-        aria-label={ariaLabel}
-        onClickCapture={(event) => {
-          if (
-            event.defaultPrevented ||
-            event.button !== 0 ||
-            event.ctrlKey ||
-            event.metaKey ||
-            event.shiftKey ||
-            event.altKey
-          ) {
-            return;
-          }
-          // Pierre does not emit a selection change for its sole selected row.
-          // Read selection before the row handles the click so new selections reveal only once.
-          const selected = model.getSelectedPaths();
-          const path = selected.length === 1 ? selected[0] : undefined;
-          if (!path || !filePathsRef.current.has(path)) return;
-          const clickedSelectedRow = event.nativeEvent
-            .composedPath()
-            .some(
-              (node) => node instanceof HTMLElement && node.getAttribute("data-item-path") === path,
-            );
-          if (clickedSelectedRow) onSelectFileRef.current(path);
-        }}
-        className="min-h-0 flex-1 overflow-hidden"
-        style={pierreTreeStyle(resolvedTheme)}
-      />
+      {hasPrefixCollision ? (
+        <DiffFileCollisionList
+          entries={entries}
+          selectedPath={selectedPath}
+          revealRequestId={revealRequestId}
+          ariaLabel={ariaLabel}
+          onSelectFile={onSelectFile}
+        />
+      ) : (
+        <FileTree
+          model={model}
+          aria-label={ariaLabel}
+          onClickCapture={(event) => {
+            if (
+              event.defaultPrevented ||
+              event.button !== 0 ||
+              event.ctrlKey ||
+              event.metaKey ||
+              event.shiftKey ||
+              event.altKey
+            ) {
+              return;
+            }
+            // Pierre does not emit a selection change for its sole selected row.
+            // Read selection before the row handles the click so new selections reveal only once.
+            const selected = model.getSelectedPaths();
+            const path = selected.length === 1 ? selected[0] : undefined;
+            if (!path || !filePathsRef.current.has(path)) return;
+            const clickedSelectedRow = event.nativeEvent
+              .composedPath()
+              .some(
+                (node) =>
+                  node instanceof HTMLElement && node.getAttribute("data-item-path") === path,
+              );
+            if (clickedSelectedRow) onSelectFileRef.current(path);
+          }}
+          className="min-h-0 flex-1 overflow-hidden"
+          style={pierreTreeStyle(resolvedTheme)}
+        />
+      )}
       {footer}
     </div>
+  );
+}
+
+function gitStatusMark(status: DiffFileTreeEntry["status"]): string {
+  switch (status) {
+    case "added":
+      return "A";
+    case "deleted":
+      return "D";
+    case "renamed":
+      return "R";
+    default:
+      return "M";
+  }
+}
+
+function gitStatusMarkClassName(status: DiffFileTreeEntry["status"]): string {
+  switch (status) {
+    case "added":
+      return "text-diff-addition";
+    case "deleted":
+      return "text-diff-deletion";
+    default:
+      return "text-muted-foreground";
+  }
+}
+
+/** Flat fallback when git replaces a file/symlink with a directory of the same name, or the reverse. */
+function DiffFileCollisionList({
+  entries,
+  selectedPath,
+  revealRequestId,
+  ariaLabel,
+  onSelectFile,
+}: {
+  entries: ReadonlyArray<DiffFileTreeEntry>;
+  selectedPath: string | null;
+  revealRequestId: number;
+  ariaLabel: string;
+  onSelectFile: (path: string) => void;
+}) {
+  const selectedRef = useRef<HTMLButtonElement | null>(null);
+  const handledRevealRef = useRef<{ path: string; revealRequestId: number } | null>(null);
+  useEffect(() => {
+    if (selectedPath === null) {
+      handledRevealRef.current = null;
+      return;
+    }
+    const handled = handledRevealRef.current;
+    if (handled?.path === selectedPath && handled.revealRequestId === revealRequestId) return;
+    handledRevealRef.current = { path: selectedPath, revealRequestId };
+    selectedRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [revealRequestId, selectedPath]);
+
+  return (
+    <ul className="min-h-0 flex-1 overflow-auto p-1" aria-label={ariaLabel}>
+      {entries.map((entry) => {
+        const selected = entry.path === selectedPath;
+        return (
+          <li key={`${entry.path}\0${entry.status}`}>
+            <button
+              type="button"
+              data-item-path={entry.path}
+              ref={selected ? selectedRef : undefined}
+              aria-current={selected ? "true" : undefined}
+              className={cn(
+                "flex w-full items-center gap-2 rounded-[5px] px-2 py-0.5 text-left text-xs",
+                selected ? "bg-foreground/12" : "hover:bg-foreground/[0.07]",
+              )}
+              onClick={() => onSelectFile(entry.path)}
+            >
+              <span className="min-w-0 flex-1 truncate">{entry.path}</span>
+              <span
+                className={cn(
+                  "shrink-0 font-medium tabular-nums",
+                  gitStatusMarkClassName(entry.status),
+                )}
+              >
+                {gitStatusMark(entry.status)}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
