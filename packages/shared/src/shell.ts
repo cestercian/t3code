@@ -73,10 +73,7 @@ function escapeWindowsShellArg(arg: string): string {
  * rather than escaped. An empty argv is the documented migration; Node still
  * expands it to `%ComSpec% /d /s /c "…"` with `windowsVerbatimArguments`.
  */
-function buildWindowsCmdExeCommandLine(
-  command: string,
-  args: ReadonlyArray<string>,
-): string {
+function buildWindowsCmdExeCommandLine(command: string, args: ReadonlyArray<string>): string {
   return [escapeWindowsShellArg(command), ...args.map(escapeWindowsShellArg)].join(" ");
 }
 
