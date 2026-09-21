@@ -166,24 +166,48 @@ function refersToAcpExecutable(value: string, executableName: string) {
   );
 }
 
-/** Quoted and unquoted references to the ACP executable inside a launcher script. */
-function wrapperExecutableReferences(contents: string, executableName: string) {
-  const found: string[] = [];
-  const seen = new Set<string>();
-  const add = (value: string) => {
-    const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed) || !refersToAcpExecutable(trimmed, executableName)) return;
-    seen.add(trimmed);
-    found.push(trimmed);
-  };
+/** `%VAR%` / `!VAR!` paths are not expanded; only `%~dp0` is a proven location. */
+function isProvenLaunchPath(value: string, executableName: string) {
+  if (!refersToAcpExecutable(value, executableName)) return false;
+  return !/[%!]/u.test(value.replace(/%~dp0/giu, ""));
+}
+
+const BATCH_IGNORABLE_LINE =
+  /^(?:echo(?:\.|\s+.*)?|set(?:local)?\b.*|endlocal\b.*|(?:cd|chdir|pushd|popd)\b.*|(?:title|chcp|cls|color)\b.*)$/iu;
+const BATCH_CONTROL_FLOW_LINE = /^(?:if|else|goto|for|start)\b/iu;
+
+function provenBatchLaunchPath(command: string, executableName: string) {
+  const quoted = /^"([^"]+)"(?:\s+.*)?$/u.exec(command);
+  const unquoted = quoted === null ? /^([^\s]+)(?:\s+.*)?$/u.exec(command) : null;
+  const target = quoted?.[1] ?? unquoted?.[1];
+  return target !== undefined && isProvenLaunchPath(target, executableName) ? target : null;
+}
+
+/**
+ * The executable a `.cmd`/`.bat` wrapper actually starts, not a path mentioned
+ * in `echo`/`set` or an unexecuted branch. Returns null when control flow or
+ * quoting makes that target unprovable.
+ */
+function provenWrapperLaunchTarget(contents: string, executableName: string) {
+  let found: string | undefined;
   for (const rawLine of contents.split(/\r?\n/u)) {
-    const line = rawLine.trim();
-    if (line.length === 0 || /^(?:rem\b|::)/iu.test(line)) continue;
-    for (const match of line.matchAll(/"([^"]+)"/g)) add(match[1] ?? "");
-    for (const match of line.matchAll(/'([^']+)'/g)) add(match[1] ?? "");
-    for (const token of line.split(/[\s,;=&|<>^]+/u)) add(token.replace(/^@+/u, ""));
+    const line = rawLine.trim().replace(/^@+/u, "").trim();
+    if (line.length === 0 || /^(?:rem\b|::)/iu.test(line) || BATCH_IGNORABLE_LINE.test(line)) {
+      continue;
+    }
+    if (
+      BATCH_CONTROL_FLOW_LINE.test(line) ||
+      /^:[^:]/u.test(line) ||
+      (line.match(/"/g) ?? []).length % 2 !== 0 ||
+      /[&|<>()]/.test(line.replace(/"[^"]*"/g, ""))
+    ) {
+      return null;
+    }
+    const target = provenBatchLaunchPath(line.replace(/^call\s+/iu, "").trim(), executableName);
+    if (target === null || (found !== undefined && found !== target)) return null;
+    found = target;
   }
-  return found;
+  return found ?? null;
 }
 
 function expandWrapperPath(referenced: string, wrapperDirectory: string, path: Path.Path) {
@@ -422,15 +446,13 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     } satisfies AntigravityExecutable;
   });
 
-  // Follow .cmd/.bat wrappers to agy_acp_server.exe and use that file's
-  // sibling harness. ACP is JSON-RPC over stdin/stdout; spawning the
-  // launcher through cmd.exe breaks the handshake, and a copied harness
-  // next to the wrapper can be a different release.
+  // Follow a proven .cmd/.bat launch to agy_acp_server.exe and use that
+  // file's sibling harness. ACP is JSON-RPC over stdin/stdout; spawning
+  // the launcher through cmd.exe breaks the handshake. A stale
+  // agy_acp_server.exe next to the wrapper is not a fallback.
   const unwrapWindowsLauncher = Effect.fn("AntigravityInstallation.unwrapWindowsLauncher")(
     function* (candidate: string) {
       if (platform !== "win32" || !isWindowsLauncherPath(candidate)) return candidate;
-      const sibling = path.join(path.dirname(candidate), names.executable);
-      if (yield* executableFile(sibling)) return yield* fs.realPath(sibling);
       const info = yield* fs.stat(candidate).pipe(Effect.option);
       if (
         Option.isNone(info) ||
@@ -439,16 +461,15 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
       ) {
         return null;
       }
-      const contents = yield* fs.readFileString(candidate);
-      const wrapperDirectory = path.dirname(candidate);
-      for (const referenced of wrapperExecutableReferences(contents, names.executable)) {
-        const resolved = expandWrapperPath(referenced, wrapperDirectory, path);
-        if (!(yield* executableFile(resolved))) continue;
-        const real = yield* fs.realPath(resolved);
-        if (path.basename(real).toLowerCase() !== names.executable.toLowerCase()) continue;
-        return real;
-      }
-      return null;
+      const referenced = provenWrapperLaunchTarget(
+        yield* fs.readFileString(candidate),
+        names.executable,
+      );
+      if (referenced === null) return null;
+      const resolved = expandWrapperPath(referenced, path.dirname(candidate), path);
+      if (!(yield* executableFile(resolved))) return null;
+      const real = yield* fs.realPath(resolved);
+      return path.basename(real).toLowerCase() === names.executable.toLowerCase() ? real : null;
     },
   );
 

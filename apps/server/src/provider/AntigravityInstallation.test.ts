@@ -859,6 +859,81 @@ it.layer(NodeServices.layer)("Antigravity installation", (it) => {
     }),
   );
 
+  it.effect(
+    "follows a Windows launcher to another release when a stale sibling executable exists",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { installation, baseDir } = yield* makeHarness({
+          platform: "win32",
+          previous: true,
+        });
+        const extractDirectory = path.join(baseDir, "manual-extract");
+        yield* fs.makeDirectory(extractDirectory);
+        const executable = path.join(extractDirectory, "agy_acp_server.exe");
+        const harness = path.join(extractDirectory, "localharness_external.exe");
+        yield* fs.writeFileString(executable, "extract server", { mode: 0o755 });
+        yield* fs.writeFileString(harness, "extract harness", { mode: 0o755 });
+        const wrapperDirectory = path.join(baseDir, "wrappers");
+        yield* fs.makeDirectory(wrapperDirectory);
+        const staleExecutable = path.join(wrapperDirectory, "agy_acp_server.exe");
+        const staleHarness = path.join(wrapperDirectory, "localharness_external.exe");
+        yield* fs.writeFileString(staleExecutable, "stale server", { mode: 0o755 });
+        yield* fs.writeFileString(staleHarness, "stale harness", { mode: 0o755 });
+        const wrapper = path.join(wrapperDirectory, "agy-wrapper.cmd");
+        yield* fs.writeFileString(
+          wrapper,
+          [
+            "@echo off",
+            `echo "${staleExecutable}"`,
+            `set AGY_HOME=${wrapperDirectory}`,
+            `"${executable}" %*`,
+            "",
+          ].join("\r\n"),
+        );
+        const selected = yield* installation.resolve(wrapper);
+        expect(selected).toMatchObject({
+          executablePath: executable,
+          harnessPath: harness,
+          source: "override",
+          managedVersionDirectory: null,
+        });
+        expect(yield* fs.readFileString(selected.executablePath)).toBe("extract server");
+        expect(yield* fs.readFileString(selected.harnessPath)).toBe("extract harness");
+        yield* expectPreviousRelease(installation);
+      }),
+  );
+
+  it.effect("rejects a Windows launcher with no proven launch even when a sibling exists", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { installation, baseDir } = yield* makeHarness({
+        platform: "win32",
+        previous: true,
+      });
+      const wrapperDirectory = path.join(baseDir, "wrappers");
+      yield* fs.makeDirectory(wrapperDirectory);
+      const sibling = path.join(wrapperDirectory, "agy_acp_server.exe");
+      yield* fs.writeFileString(sibling, "stale server", { mode: 0o755 });
+      yield* fs.writeFileString(
+        path.join(wrapperDirectory, "localharness_external.exe"),
+        "stale harness",
+        { mode: 0o755 },
+      );
+      const wrapper = path.join(wrapperDirectory, "agy-wrapper.cmd");
+      yield* fs.writeFileString(
+        wrapper,
+        `@echo off\r\necho "${sibling}"\r\nset AGY_HOME=${wrapperDirectory}\\agy_acp_server.exe\r\n`,
+      );
+      expect(yield* installation.resolve(wrapper).pipe(Effect.flip)).toMatchObject({
+        operation: "resolve",
+      });
+      yield* expectPreviousRelease(installation);
+    }),
+  );
+
   it.effect("rejects a Windows launcher that only has a copied harness sibling", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
