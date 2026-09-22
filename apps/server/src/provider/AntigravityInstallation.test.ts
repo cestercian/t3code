@@ -971,6 +971,49 @@ it.layer(NodeServices.layer)("Antigravity installation", (it) => {
     }),
   );
 
+  it.effect("rejects a Windows launcher that changes directory before a relative launch", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { installation, baseDir } = yield* makeHarness({
+        platform: "win32",
+        previous: true,
+      });
+      const wrapperDirectory = path.join(baseDir, "wrappers");
+      yield* fs.makeDirectory(wrapperDirectory);
+      const sibling = path.join(wrapperDirectory, "agy_acp_server.exe");
+      yield* fs.writeFileString(sibling, "stale server", { mode: 0o755 });
+      yield* fs.writeFileString(
+        path.join(wrapperDirectory, "localharness_external.exe"),
+        "stale harness",
+        { mode: 0o755 },
+      );
+      const releaseDirectory = path.join(baseDir, "release");
+      yield* fs.makeDirectory(releaseDirectory);
+      yield* fs.writeFileString(
+        path.join(releaseDirectory, "agy_acp_server.exe"),
+        "release server",
+        { mode: 0o755 },
+      );
+      yield* fs.writeFileString(
+        path.join(releaseDirectory, "localharness_external.exe"),
+        "release harness",
+        { mode: 0o755 },
+      );
+      const wrapper = path.join(wrapperDirectory, "agy-wrapper.cmd");
+      yield* fs.writeFileString(
+        wrapper,
+        ["@echo off", `cd /d "${releaseDirectory}"`, `"%~dp0agy_acp_server.exe" %*`, ""].join(
+          "\r\n",
+        ),
+      );
+      expect(yield* installation.resolve(wrapper).pipe(Effect.flip)).toMatchObject({
+        operation: "resolve",
+      });
+      yield* expectPreviousRelease(installation);
+    }),
+  );
+
   it.effect("rejects a Windows launcher with no proven launch even when a sibling exists", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

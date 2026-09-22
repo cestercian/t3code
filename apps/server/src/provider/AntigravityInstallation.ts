@@ -173,8 +173,11 @@ function isProvenLaunchPath(value: string, executableName: string) {
 }
 
 const BATCH_IGNORABLE_LINE =
-  /^(?:echo(?:\.|\s+.*)?|set(?:local)?\b.*|endlocal\b.*|(?:cd|chdir|pushd|popd)\b.*|(?:title|chcp|cls|color)\b.*|exit\s+\/b\b.*)$/iu;
-const BATCH_CONTROL_FLOW_LINE = /^(?:if|else|goto|for|start)\b/iu;
+  /^(?:echo(?:\.|\s+.*)?|set(?:local)?\b.*|endlocal\b.*|(?:title|chcp|cls|color)\b.*|exit\s+\/b\b.*)$/iu;
+// `cd`/`chdir`/`pushd`/`popd` change the effective directory a later relative
+// launch resolves against; we do not track that, so wrappers using them are
+// unprovable and rejected.
+const BATCH_CONTROL_FLOW_LINE = /^(?:if|else|goto|for|start|cd|chdir|pushd|popd)\b/iu;
 
 function provenBatchLaunchPath(command: string, executableName: string) {
   const quoted = /^"([^"]+)"(?:\s+.*)?$/u.exec(command);
