@@ -443,13 +443,16 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       );
     };
 
-    const failOverLimit = () =>
-      Effect.fail(
-        new CodexError.CodexAppServerTransportError({
-          operation: "read-input-stream",
-          cause: new Error(`Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`),
-        }),
-      );
+    // Append into the existing remainder entry so fragmented input scales with
+    // payload bytes, not chunk count (one entry per byte would exhaust the heap
+    // at the 128 MiB ceiling before the size check could fail).
+    const appendRemainder = (fragment: string) => {
+      if (remainder.length === 0) {
+        remainder.push(fragment);
+      } else {
+        remainder[remainder.length - 1] += fragment;
+      }
+    };
 
     yield* options.stdio.stdin.pipe(
       Stream.interruptWhen(Deferred.await(terminationSignal)),
@@ -468,12 +471,15 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
               pendingCr = false;
               return false;
             }
-            remainder.push(chunk.slice(from, to));
+            appendRemainder(chunk.slice(from, to));
             remainderBytes += fragmentLength;
             return true;
           };
           if (pendingCr) {
-            if (chunk.length > 0 && chunk.charCodeAt(0) === 0x0a) {
+            // Empty decodeText chunks must not commit the deferred \r; the
+            // partner \n may still arrive in a later chunk.
+            if (chunk.length === 0) return Effect.void;
+            if (chunk.charCodeAt(0) === 0x0a) {
               // Previous chunk's trailing \r plus this chunk's leading \n form
               // a CRLF terminator; neither byte is charged against the limit.
               pendingCr = false;
@@ -487,9 +493,16 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
               if (remainderBytes + 1 > maxIncomingMessageBytes) {
                 remainder.length = 0;
                 remainderBytes = 0;
-                return failOverLimit();
+                return Effect.fail(
+                  new CodexError.CodexAppServerTransportError({
+                    operation: "read-input-stream",
+                    cause: new Error(
+                      `Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`,
+                    ),
+                  }),
+                );
               }
-              remainder.push("\r");
+              appendRemainder("\r");
               remainderBytes += 1;
             }
           }
@@ -499,7 +512,14 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
             const hasCr = newline > start && chunk.charCodeAt(newline - 1) === 0x0d;
             const rangeEnd = hasCr ? newline - 1 : newline;
             if (!retainRange(start, rangeEnd)) {
-              return failOverLimit();
+              return Effect.fail(
+                new CodexError.CodexAppServerTransportError({
+                  operation: "read-input-stream",
+                  cause: new Error(
+                    `Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`,
+                  ),
+                }),
+              );
             }
             lines.push(remainder.join(""));
             remainder.length = 0;
@@ -513,7 +533,14 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
             const endsWithCr = chunk.charCodeAt(chunk.length - 1) === 0x0d;
             const rangeEnd = endsWithCr ? chunk.length - 1 : chunk.length;
             if (!retainRange(start, rangeEnd)) {
-              return failOverLimit();
+              return Effect.fail(
+                new CodexError.CodexAppServerTransportError({
+                  operation: "read-input-stream",
+                  cause: new Error(
+                    `Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`,
+                  ),
+                }),
+              );
             }
             if (endsWithCr) pendingCr = true;
           }
@@ -531,13 +558,20 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
               // The stream ended before \n arrived, so the deferred \r is
               // literal content on the final line and must be charged.
               pendingCr = false;
-              remainder.push("\r");
+              appendRemainder("\r");
               remainderBytes += 1;
             }
             if (remainderBytes > maxIncomingMessageBytes) {
               remainder.length = 0;
               remainderBytes = 0;
-              return failOverLimit();
+              return Effect.fail(
+                new CodexError.CodexAppServerTransportError({
+                  operation: "read-input-stream",
+                  cause: new Error(
+                    `Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`,
+                  ),
+                }),
+              );
             }
             const line = remainder.join("");
             remainder.length = 0;

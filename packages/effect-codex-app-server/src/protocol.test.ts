@@ -901,6 +901,10 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
           label: "CRLF split across chunks",
           chunks: [encoder.encode(`${encoded}\r`), encoder.encode("\n")],
         },
+        {
+          label: "CRLF with empty chunk between CR and LF",
+          chunks: [encoder.encode(`${encoded}\r`), new Uint8Array(), encoder.encode("\n")],
+        },
       ];
 
       for (const framing of framings) {
@@ -931,6 +935,38 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
           `${framing.label} should end cleanly, not by limit`,
         );
       }
+    }),
+  );
+
+  it.effect("coalesces many tiny unterminated chunks without exploding remainder count", () =>
+    Effect.gen(function* () {
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const received = yield* Deferred.make<CodexProtocol.CodexAppServerIncomingNotification>();
+      const termination = yield* Deferred.make<CodexError.CodexAppServerError>();
+      const message = { method: "x", params: { n: 1 } };
+      const encoded = encodeUnknownJsonString(message);
+      const bytes = encoder.encode(`${encoded}\n`);
+      yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        maxIncomingMessageBytes: bytes.byteLength,
+        onNotification: (notification) =>
+          Deferred.succeed(received, notification).pipe(Effect.asVoid),
+        onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
+      });
+
+      // One-byte chunks would previously push one remainder entry per byte. With
+      // coalescing, remainder stays O(1) entries while bytes stay under the limit.
+      for (let offset = 0; offset < bytes.length - 1; offset++) {
+        yield* Queue.offer(input, bytes.subarray(offset, offset + 1));
+      }
+      yield* Queue.offer(input, bytes.subarray(bytes.length - 1));
+      yield* Queue.end(input);
+
+      assert.deepEqual(yield* Deferred.await(received), message);
+      assert.instanceOf(
+        yield* Deferred.await(termination),
+        CodexError.CodexAppServerInputStreamEndedError,
+      );
     }),
   );
 
