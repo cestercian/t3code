@@ -314,4 +314,43 @@ describe("diff tree file/directory prefix collisions", () => {
     await activateListed("office");
     expect(targets).toEqual([{ type: "item", id: "office\u0000office", align: "start" }]);
   });
+
+  it("retries scrollIntoView when a later slice mounts the selected row", async () => {
+    const scrolls: string[] = [];
+    const createNodeMock = (element: { type: string; props: Record<string, unknown> }) => {
+      if (element.type === "button") {
+        return {
+          scrollIntoView: () => scrolls.push(element.props["data-item-path"] as string),
+        };
+      }
+      return null;
+    };
+    await act(async () => {
+      renderer = create(
+        <Panel
+          files={[
+            { path: "src", status: "deleted" },
+            { path: "src/a.ts", status: "added" },
+          ]}
+          selectedPath="office"
+        />,
+        { createNodeMock },
+      );
+    });
+    expect(scrolls).toEqual([]);
+    await act(async () => {
+      renderer!.update(
+        <Panel
+          files={[
+            { path: "src", status: "deleted" },
+            { path: "src/a.ts", status: "added" },
+            { path: "office", status: "deleted" },
+            { path: "office/config.ts", status: "added" },
+          ]}
+          selectedPath="office"
+        />,
+      );
+    });
+    expect(scrolls).toEqual(["office"]);
+  });
 });

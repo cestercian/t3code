@@ -273,16 +273,22 @@ function DiffFileCollisionList({
 }) {
   const selectedRef = useRef<HTMLButtonElement | null>(null);
   const handledRevealRef = useRef<{ path: string; revealRequestId: number } | null>(null);
+  const selectedPathIsPresent =
+    selectedPath !== null && entries.some((entry) => entry.path === selectedPath);
   useEffect(() => {
-    if (selectedPath === null) {
+    if (!selectedPathIsPresent) {
+      // A colliding file that has not mounted yet (a later PR slice, a refresh) has to be
+      // revealed again once its list entry arrives.
       handledRevealRef.current = null;
       return;
     }
     const handled = handledRevealRef.current;
     if (handled?.path === selectedPath && handled.revealRequestId === revealRequestId) return;
+    const selected = selectedRef.current;
+    if (selected === null) return;
     handledRevealRef.current = { path: selectedPath, revealRequestId };
-    selectedRef.current?.scrollIntoView?.({ block: "nearest" });
-  }, [revealRequestId, selectedPath]);
+    selected.scrollIntoView?.({ block: "nearest" });
+  }, [revealRequestId, selectedPath, selectedPathIsPresent]);
 
   return (
     <ul className="min-h-0 flex-1 overflow-auto p-1" aria-label={ariaLabel}>
