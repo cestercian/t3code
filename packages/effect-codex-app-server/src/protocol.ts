@@ -20,7 +20,35 @@ const MAX_BUFFERED_RAW_MESSAGES = 32;
 // observed Codex diffs (~49M characters) and Effect ndjson's 16 MiB default,
 // and well below a V8 heap-threatening line. Tests inject a smaller ceiling.
 const MAX_INCOMING_MESSAGE_BYTES = 128 * 1024 * 1024;
-const utf8 = new TextEncoder();
+
+// Counts UTF-8 bytes for `chunk.slice(from, to)` without allocating the
+// encoded copy, and stops early once the total exceeds `limit`. Unpaired
+// surrogates match TextEncoder's replacement-character output (3 bytes),
+// so the returned count matches `utf8.encode(fragment).byteLength` whenever
+// it stays within `limit`.
+const countUtf8Bytes = (chunk: string, from: number, to: number, limit: number): number => {
+  let bytes = 0;
+  for (let i = from; i < to; i++) {
+    const code = chunk.charCodeAt(i);
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < to) {
+      const next = chunk.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        i += 1;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+    if (bytes > limit) return bytes;
+  }
+  return bytes;
+};
 
 export interface CodexAppServerProtocolLogEvent {
   readonly direction: "incoming" | "outgoing";
@@ -411,14 +439,14 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
           const lines: Array<string> = [];
           let start = 0;
           const retainRange = (from: number, to: number) => {
-            const fragment = chunk.slice(from, to);
-            const fragmentLength = utf8.encode(fragment).byteLength;
-            if (remainderBytes + fragmentLength > maxIncomingMessageBytes) {
+            const limit = maxIncomingMessageBytes - remainderBytes;
+            const fragmentLength = countUtf8Bytes(chunk, from, to, limit);
+            if (fragmentLength > limit) {
               remainder.length = 0;
               remainderBytes = 0;
               return false;
             }
-            remainder.push(fragment);
+            remainder.push(chunk.slice(from, to));
             remainderBytes += fragmentLength;
             return true;
           };
