@@ -173,11 +173,12 @@ function isProvenLaunchPath(value: string, executableName: string) {
 }
 
 const BATCH_IGNORABLE_LINE =
-  /^(?:echo(?:\.|\s+.*)?|set(?:local)?\b.*|endlocal\b.*|(?:title|chcp|cls|color)\b.*|exit\s+\/b\b.*)$/iu;
+  /^(?:echo(?:\.|\s+.*)?|set(?:local)?\b.*|endlocal\b.*|(?:title|chcp|cls|color)\b.*)$/iu;
 // `cd`/`chdir`/`pushd`/`popd` change the effective directory a later relative
 // launch resolves against; we do not track that, so wrappers using them are
 // unprovable and rejected.
 const BATCH_CONTROL_FLOW_LINE = /^(?:if|else|goto|for|start|cd|chdir|pushd|popd)\b/iu;
+const BATCH_EXIT_LINE = /^exit\s+\/b\b.*$/iu;
 
 function provenBatchLaunchPath(command: string, executableName: string) {
   const quoted = /^"([^"]+)"(?:\s+.*)?$/u.exec(command);
@@ -200,6 +201,12 @@ function provenWrapperLaunchTarget(contents: string, executableName: string) {
     }
     if (/[&|<>()]/.test(line.replace(/"[^"]*"/g, ""))) {
       return null;
+    }
+    if (BATCH_EXIT_LINE.test(line)) {
+      // `exit /b` before a proven launch aborts the wrapper; a later launch
+      // line is unreachable and must not be resolved.
+      if (found === undefined) return null;
+      continue;
     }
     if (BATCH_IGNORABLE_LINE.test(line)) {
       continue;
