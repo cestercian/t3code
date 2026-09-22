@@ -199,8 +199,20 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
     const pending = yield* Ref.make(new Map<string, CodexAppServerPendingRequest>());
     const nextRequestId = yield* Ref.make(1);
     const maxIncomingMessageBytes = options.maxIncomingMessageBytes ?? MAX_INCOMING_MESSAGE_BYTES;
+    if (!Number.isInteger(maxIncomingMessageBytes) || maxIncomingMessageBytes < 0) {
+      return yield* Effect.die(
+        new Error(
+          `Codex App Server maxIncomingMessageBytes must be a finite non-negative integer; received ${String(options.maxIncomingMessageBytes)}.`,
+        ),
+      );
+    }
     const remainder: Array<string> = [];
     let remainderBytes = 0;
+    // Tracks a trailing carriage return whose partner \n may arrive in a later
+    // chunk. Kept out of `remainderBytes` so a CRLF-framed message that would
+    // exactly fill `maxIncomingMessageBytes` still fits after the terminator
+    // is stripped, matching LF-framed behavior at the limit.
+    let pendingCr = false;
     const terminationHandled = yield* Ref.make(false);
     const terminationFailure = yield* Ref.make(Option.none<CodexError.CodexAppServerError>());
     const terminationSignal = yield* Deferred.make<void>();
@@ -431,6 +443,14 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       );
     };
 
+    const failOverLimit = () =>
+      Effect.fail(
+        new CodexError.CodexAppServerTransportError({
+          operation: "read-input-stream",
+          cause: new Error(`Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`),
+        }),
+      );
+
     yield* options.stdio.stdin.pipe(
       Stream.interruptWhen(Deferred.await(terminationSignal)),
       Stream.decodeText(),
@@ -439,47 +459,63 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
           const lines: Array<string> = [];
           let start = 0;
           const retainRange = (from: number, to: number) => {
+            if (from >= to) return true;
             const limit = maxIncomingMessageBytes - remainderBytes;
             const fragmentLength = countUtf8Bytes(chunk, from, to, limit);
             if (fragmentLength > limit) {
               remainder.length = 0;
               remainderBytes = 0;
+              pendingCr = false;
               return false;
             }
             remainder.push(chunk.slice(from, to));
             remainderBytes += fragmentLength;
             return true;
           };
-          for (
-            let newline = chunk.indexOf("\n");
-            newline !== -1;
-            newline = chunk.indexOf("\n", start)
-          ) {
-            if (!retainRange(start, newline)) {
-              return Effect.fail(
-                new CodexError.CodexAppServerTransportError({
-                  operation: "read-input-stream",
-                  cause: new Error(
-                    `Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`,
-                  ),
-                }),
-              );
+          if (pendingCr) {
+            if (chunk.length > 0 && chunk.charCodeAt(0) === 0x0a) {
+              // Previous chunk's trailing \r plus this chunk's leading \n form
+              // a CRLF terminator; neither byte is charged against the limit.
+              pendingCr = false;
+              lines.push(remainder.join(""));
+              remainder.length = 0;
+              remainderBytes = 0;
+              start = 1;
+            } else {
+              // The deferred \r is line content after all; commit its byte now.
+              pendingCr = false;
+              if (remainderBytes + 1 > maxIncomingMessageBytes) {
+                remainder.length = 0;
+                remainderBytes = 0;
+                return failOverLimit();
+              }
+              remainder.push("\r");
+              remainderBytes += 1;
             }
-            lines.push(remainder.join("").replace(/\r$/, ""));
+          }
+          while (start < chunk.length) {
+            const newline = chunk.indexOf("\n", start);
+            if (newline === -1) break;
+            const hasCr = newline > start && chunk.charCodeAt(newline - 1) === 0x0d;
+            const rangeEnd = hasCr ? newline - 1 : newline;
+            if (!retainRange(start, rangeEnd)) {
+              return failOverLimit();
+            }
+            lines.push(remainder.join(""));
             remainder.length = 0;
             remainderBytes = 0;
             start = newline + 1;
           }
           // Keep unfinished lines in fragments so each chunk is scanned only once.
-          if (start < chunk.length && !retainRange(start, chunk.length)) {
-            return Effect.fail(
-              new CodexError.CodexAppServerTransportError({
-                operation: "read-input-stream",
-                cause: new Error(
-                  `Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`,
-                ),
-              }),
-            );
+          if (start < chunk.length) {
+            // Defer a trailing \r; only the next chunk (or stream end) reveals
+            // whether it is a CRLF terminator or literal content.
+            const endsWithCr = chunk.charCodeAt(chunk.length - 1) === 0x0d;
+            const rangeEnd = endsWithCr ? chunk.length - 1 : chunk.length;
+            if (!retainRange(start, rangeEnd)) {
+              return failOverLimit();
+            }
+            if (endsWithCr) pendingCr = true;
           }
           return Effect.forEach(lines, handleLine, { discard: true });
         }),
@@ -491,17 +527,17 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
           ),
         onSuccess: () =>
           Effect.suspend(() => {
+            if (pendingCr) {
+              // The stream ended before \n arrived, so the deferred \r is
+              // literal content on the final line and must be charged.
+              pendingCr = false;
+              remainder.push("\r");
+              remainderBytes += 1;
+            }
             if (remainderBytes > maxIncomingMessageBytes) {
               remainder.length = 0;
               remainderBytes = 0;
-              return Effect.fail(
-                new CodexError.CodexAppServerTransportError({
-                  operation: "read-input-stream",
-                  cause: new Error(
-                    `Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`,
-                  ),
-                }),
-              );
+              return failOverLimit();
             }
             const line = remainder.join("");
             remainder.length = 0;

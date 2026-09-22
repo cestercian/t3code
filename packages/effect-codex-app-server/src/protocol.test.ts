@@ -885,6 +885,114 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
     }),
   );
 
+  it.effect("accepts LF- and CRLF-framed messages that exactly fill maxIncomingMessageBytes", () =>
+    Effect.gen(function* () {
+      const message = { method: "x" };
+      const encoded = encodeUnknownJsonString(message);
+      const limit = encoder.encode(encoded).byteLength;
+
+      const framings: ReadonlyArray<{
+        readonly label: string;
+        readonly chunks: ReadonlyArray<Uint8Array>;
+      }> = [
+        { label: "LF single chunk", chunks: [encoder.encode(`${encoded}\n`)] },
+        { label: "CRLF single chunk", chunks: [encoder.encode(`${encoded}\r\n`)] },
+        {
+          label: "CRLF split across chunks",
+          chunks: [encoder.encode(`${encoded}\r`), encoder.encode("\n")],
+        },
+      ];
+
+      for (const framing of framings) {
+        const { stdio, input } = yield* makeInMemoryStdio();
+        const received = yield* Deferred.make<CodexProtocol.CodexAppServerIncomingNotification>();
+        const termination = yield* Deferred.make<CodexError.CodexAppServerError>();
+        yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+          stdio,
+          maxIncomingMessageBytes: limit,
+          onNotification: (notification) =>
+            Deferred.succeed(received, notification).pipe(Effect.asVoid),
+          onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
+        });
+
+        for (const chunk of framing.chunks) {
+          yield* Queue.offer(input, chunk);
+        }
+        yield* Queue.end(input);
+
+        assert.deepEqual(
+          yield* Deferred.await(received),
+          message,
+          `${framing.label} at exact limit was not routed`,
+        );
+        assert.instanceOf(
+          yield* Deferred.await(termination),
+          CodexError.CodexAppServerInputStreamEndedError,
+          `${framing.label} should end cleanly, not by limit`,
+        );
+      }
+    }),
+  );
+
+  it.effect("rejects CRLF-framed messages whose content exceeds maxIncomingMessageBytes", () =>
+    Effect.gen(function* () {
+      const message = { method: "x", p: "y" };
+      const encoded = encodeUnknownJsonString(message);
+      const limit = encoder.encode(encoded).byteLength - 1;
+
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const termination = yield* Deferred.make<CodexError.CodexAppServerError>();
+      let notificationCount = 0;
+      yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        maxIncomingMessageBytes: limit,
+        onNotification: () => Effect.sync(() => notificationCount++).pipe(Effect.asVoid),
+        onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
+      });
+
+      yield* Queue.offer(input, encoder.encode(`${encoded}\r\n`));
+
+      const error = yield* Deferred.await(termination);
+      assert.instanceOf(error, CodexError.CodexAppServerTransportError);
+      assert.equal(error.operation, "read-input-stream");
+      assert.equal(notificationCount, 0);
+    }),
+  );
+
+  it.effect("rejects invalid maxIncomingMessageBytes at construction", () =>
+    Effect.gen(function* () {
+      for (const invalid of [
+        Number.NaN,
+        Number.POSITIVE_INFINITY,
+        Number.NEGATIVE_INFINITY,
+        -1,
+        1.5,
+      ]) {
+        const { stdio } = yield* makeInMemoryStdio();
+        const exit = yield* Effect.exit(
+          Effect.scoped(
+            CodexProtocol.makeCodexAppServerPatchedProtocol({
+              stdio,
+              maxIncomingMessageBytes: invalid,
+            }),
+          ),
+        );
+        assert.equal(
+          exit._tag,
+          "Failure",
+          `expected construction to fail for maxIncomingMessageBytes=${String(invalid)}`,
+        );
+        if (exit._tag === "Failure") {
+          assert.include(
+            String(exit.cause),
+            "maxIncomingMessageBytes must be a finite non-negative integer",
+            `unexpected cause for maxIncomingMessageBytes=${String(invalid)}`,
+          );
+        }
+      }
+    }),
+  );
+
   it.effect("classifies an input stream ending without inventing a cause", () =>
     Effect.gen(function* () {
       const { stdio, input } = yield* makeInMemoryStdio();
