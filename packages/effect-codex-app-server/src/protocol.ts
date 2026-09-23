@@ -475,6 +475,22 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
             remainderBytes += fragmentLength;
             return true;
           };
+          // A chunk can already hold complete messages before the fragment that
+          // crosses the limit. Deliver those lines, then fail. Leave the
+          // oversized fragment itself unparsed.
+          const failAfterCollectedLines = () =>
+            Effect.forEach(lines, handleLine, { discard: true }).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new CodexError.CodexAppServerTransportError({
+                    operation: "read-input-stream",
+                    cause: new Error(
+                      `Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`,
+                    ),
+                  }),
+                ),
+              ),
+            );
           if (pendingCr) {
             // Empty decodeText chunks must not commit the deferred \r; the
             // partner \n may still arrive in a later chunk.
@@ -512,14 +528,7 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
             const hasCr = newline > start && chunk.charCodeAt(newline - 1) === 0x0d;
             const rangeEnd = hasCr ? newline - 1 : newline;
             if (!retainRange(start, rangeEnd)) {
-              return Effect.fail(
-                new CodexError.CodexAppServerTransportError({
-                  operation: "read-input-stream",
-                  cause: new Error(
-                    `Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`,
-                  ),
-                }),
-              );
+              return failAfterCollectedLines();
             }
             lines.push(remainder.join(""));
             remainder.length = 0;
@@ -533,14 +542,7 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
             const endsWithCr = chunk.charCodeAt(chunk.length - 1) === 0x0d;
             const rangeEnd = endsWithCr ? chunk.length - 1 : chunk.length;
             if (!retainRange(start, rangeEnd)) {
-              return Effect.fail(
-                new CodexError.CodexAppServerTransportError({
-                  operation: "read-input-stream",
-                  cause: new Error(
-                    `Incoming message exceeded ${String(maxIncomingMessageBytes)} bytes.`,
-                  ),
-                }),
-              );
+              return failAfterCollectedLines();
             }
             if (endsWithCr) pendingCr = true;
           }

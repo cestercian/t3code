@@ -970,6 +970,70 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
     }),
   );
 
+  it.effect(
+    "dispatches a complete message before failing an oversized line in the same chunk",
+    () =>
+      Effect.gen(function* () {
+        const message = { method: "x" };
+        const encoded = encodeUnknownJsonString(message);
+        const limit = encoder.encode(encoded).byteLength + 8;
+        const oversized = `{"method":"x/huge","params":"${"y".repeat(limit)}"}`;
+        assert.ok(encoder.encode(oversized).byteLength > limit);
+
+        const { stdio, input } = yield* makeInMemoryStdio();
+        const notifications: Array<CodexProtocol.CodexAppServerIncomingNotification> = [];
+        const termination = yield* Deferred.make<CodexError.CodexAppServerError>();
+        yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+          stdio,
+          maxIncomingMessageBytes: limit,
+          onNotification: (notification) =>
+            Effect.sync(() => {
+              notifications.push(notification);
+            }),
+          onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
+        });
+
+        yield* Queue.offer(input, encoder.encode(`${encoded}\n${oversized}\n`));
+
+        const error = yield* Deferred.await(termination);
+        assert.instanceOf(error, CodexError.CodexAppServerTransportError);
+        assert.equal(error.operation, "read-input-stream");
+        assert.deepEqual(notifications, [message]);
+      }),
+  );
+
+  it.effect("dispatches collected lines before failing an oversized unterminated remainder", () =>
+    Effect.gen(function* () {
+      const message = { method: "x" };
+      const encoded = encodeUnknownJsonString(message);
+      const limit = encoder.encode(encoded).byteLength + 8;
+      const oversized = `{"method":"x/huge","params":"${"y".repeat(limit)}"}`;
+      assert.ok(encoder.encode(oversized).byteLength > limit);
+
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const notifications: Array<CodexProtocol.CodexAppServerIncomingNotification> = [];
+      const termination = yield* Deferred.make<CodexError.CodexAppServerError>();
+      yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        maxIncomingMessageBytes: limit,
+        onNotification: (notification) =>
+          Effect.sync(() => {
+            notifications.push(notification);
+          }),
+        onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
+      });
+
+      // No trailing newline: the overflow is the incomplete remainder appended
+      // after the complete line was already collected from this same chunk.
+      yield* Queue.offer(input, encoder.encode(`${encoded}\n${oversized}`));
+
+      const error = yield* Deferred.await(termination);
+      assert.instanceOf(error, CodexError.CodexAppServerTransportError);
+      assert.equal(error.operation, "read-input-stream");
+      assert.deepEqual(notifications, [message]);
+    }),
+  );
+
   it.effect("rejects CRLF-framed messages whose content exceeds maxIncomingMessageBytes", () =>
     Effect.gen(function* () {
       const message = { method: "x", p: "y" };
