@@ -184,7 +184,6 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
       // Later file edits wait for a service restart; children reuse the startup map.
       yield* fs.writeFileString(path.join(root, SERVICE_ENV_FILE), "T3CODE_PORT=9999\n");
 
-      // @effect-diagnostics-next-line preferSchemaOverJson:off - embeds a path in fake child source.
       const encodedSeenPath = JSON.stringify(seenPath);
       yield* writeFakeRuntime(
         fs,
@@ -220,7 +219,6 @@ process.exit(0);
         ),
       );
 
-      // @effect-diagnostics-next-line preferSchemaOverJson:off - child dump of selected env keys.
       const seen = JSON.parse(yield* fs.readFileString(seenPath)) as {
         email: string;
         token: string;
